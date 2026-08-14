@@ -40,6 +40,15 @@
         <article><div><p class="eyebrow">Redis</p><h2>Latency p95</h2></div><strong id="redis-current">—</strong><div class="metric-chart warning" id="redis-chart"></div></article>
       </section>
 
+      <section class="room-investigator" id="room-investigator" hidden aria-label="AI Investigator">
+        <div class="section-heading">
+          <div><p class="eyebrow">AI Investigator</p><h2>Evidence-grounded analysis</h2></div>
+          <button class="button investigator-button" id="investigate-button" type="button">Analyze incident</button>
+        </div>
+        <p class="investigator-intro">Uses the incident timeline, alert evidence, metrics, logs, and topology. It can propose a mitigation; it cannot execute one.</p>
+        <div class="investigation-result" id="investigation-result" hidden></div>
+      </section>
+
       <section class="room-evidence-grid" id="room-evidence" hidden>
         <article class="room-timeline"><div class="section-heading"><div><p class="eyebrow">Unified timeline</p><h2>What changed</h2></div><span class="mono" id="timeline-count">0 events</span></div><ol id="room-timeline"></ol></article>
         <aside class="room-logs"><div class="section-heading"><div><p class="eyebrow">Relevant logs</p><h2>Live evidence</h2></div></div><ol id="room-logs"><li class="empty">No relevant logs yet.</li></ol></aside>

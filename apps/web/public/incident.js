@@ -1,4 +1,5 @@
 import { buildTopologyGraph } from "./topology.js";
+import { buildInvestigationView } from "./investigation-view.js";
 
 const incidentId = new URLSearchParams(window.location.search).get("id");
 const elements = {
@@ -23,6 +24,9 @@ const elements = {
   workbench: document.getElementById("room-workbench"),
   evidence: document.getElementById("room-evidence"),
   alertCount: document.getElementById("room-alert-count"),
+  investigateButton: document.getElementById("investigate-button"),
+  investigator: document.getElementById("room-investigator"),
+  investigationResult: document.getElementById("investigation-result"),
 };
 
 let incident;
@@ -61,6 +65,38 @@ function renderIncident(nextIncident) {
   elements.workbench.hidden = false;
   elements.metrics.hidden = false;
   elements.evidence.hidden = false;
+  elements.investigator.hidden = false;
+}
+
+function element(tag, className, content) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (content) node.textContent = content;
+  return node;
+}
+
+function renderInvestigation(analysis) {
+  const view = buildInvestigationView(analysis);
+  const summary = element("p", "investigation-summary", view.summary);
+  const hypothesis = element("article", "hypothesis-card");
+  hypothesis.append(element("span", "confidence", view.confidenceLabel), element("h3", "", "Primary hypothesis"), element("p", "", view.inference));
+  const evidenceHeading = element("h4", "", "Known evidence");
+  const evidence = element("ul", "investigation-evidence");
+  evidence.append(...view.evidence.map((detail) => element("li", "", detail)));
+  hypothesis.append(evidenceHeading, evidence);
+  const uncertainty = element("p", "uncertainty", `Uncertainty: ${view.uncertainty}`);
+  elements.investigationResult.replaceChildren(summary, hypothesis, uncertainty);
+  if (view.action) {
+    const action = element("aside", "proposed-action");
+    action.append(
+      element("span", "", view.action.status),
+      element("strong", "", view.action.label),
+      element("p", "", view.action.rationale),
+      element("small", "", view.action.risk),
+    );
+    elements.investigationResult.append(action);
+  }
+  elements.investigationResult.hidden = false;
 }
 
 function renderTimeline() {
@@ -171,6 +207,28 @@ liveEvents.addEventListener("log", (event) => {
   if (!incident.affectedServices.includes(entry.serviceId)) return;
   logs.unshift(entry);
   renderLogs();
+});
+
+liveEvents.addEventListener("incident-updated", (event) => {
+  const update = JSON.parse(event.data);
+  if (update.incident?.id === incidentId) renderIncident(update.incident);
+});
+
+elements.investigateButton.addEventListener("click", async () => {
+  if (!incident) return;
+  elements.investigateButton.disabled = true;
+  elements.investigateButton.textContent = "Analyzing evidence…";
+  try {
+    const response = await fetch(`/api/incidents/${encodeURIComponent(incident.id)}/investigate`, { method: "POST" });
+    if (!response.ok) throw new Error("Unable to analyze incident evidence");
+    renderInvestigation(await response.json());
+    renderIncident(await getJson(`/api/incidents/${encodeURIComponent(incident.id)}`));
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Unable to analyze incident evidence.");
+  } finally {
+    elements.investigateButton.disabled = false;
+    elements.investigateButton.textContent = "Analyze again";
+  }
 });
 
 loadRoom();

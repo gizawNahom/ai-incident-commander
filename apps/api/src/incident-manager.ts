@@ -21,7 +21,7 @@ export type Alert = {
 };
 
 export type IncidentTimelineEvent = {
-  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED";
+  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED";
   readonly timestamp: string;
   readonly message: string;
   readonly serviceId?: string;
@@ -40,7 +40,8 @@ export type DetectedIncident = {
 
 export type IncidentEvent =
   | { readonly type: "alert-triggered"; readonly alert: Alert }
-  | { readonly type: "incident-created"; readonly incident: DetectedIncident };
+  | { readonly type: "incident-created"; readonly incident: DetectedIncident }
+  | { readonly type: "incident-updated"; readonly incident: DetectedIncident };
 
 type ObservedService = {
   readonly id: string;
@@ -95,6 +96,18 @@ export class IncidentManager {
 
   find(id: string): DetectedIncident | undefined {
     return this.incident?.id === id ? this.incident : undefined;
+  }
+
+  recordInvestigation(input: { readonly incidentId: string; readonly timestamp: string; readonly hypothesis: string; readonly suggestedAction?: string }): void {
+    if (!this.incident || this.incident.id !== input.incidentId) return;
+    const timeline: IncidentTimelineEvent[] = [
+      ...this.incident.timeline,
+      { type: "AI_ANALYSIS_STARTED", timestamp: input.timestamp, message: "Offline investigator analysis started" },
+      { type: "AI_HYPOTHESIS_GENERATED", timestamp: input.timestamp, message: input.hypothesis },
+      ...(input.suggestedAction ? [{ type: "ACTION_SUGGESTED" as const, timestamp: input.timestamp, message: input.suggestedAction }] : []),
+    ];
+    this.incident = { ...this.incident, timeline };
+    this.publish({ type: "incident-updated", incident: this.incident });
   }
 
   observe(event: OperationalEvent): void {

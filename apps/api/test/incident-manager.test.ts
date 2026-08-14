@@ -85,3 +85,28 @@ test("threshold breaches on unrelated dependency paths do not merge into one inc
 
   assert.equal(manager.list().length, 0);
 });
+
+test("records deterministic investigation activity in the incident timeline", () => {
+  const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date("2026-08-13T12:00:00.000Z") });
+  const manager = new IncidentManager();
+  const changes: IncidentEvent[] = [];
+  manager.subscribe((event) => changes.push(event));
+  simulator.subscribe((event) => manager.observe(event));
+  simulator.triggerBadPaymentDeployment();
+  simulator.advance();
+  simulator.advance();
+  simulator.advance();
+
+  manager.recordInvestigation({
+    incidentId: "INC-1042",
+    timestamp: "2026-08-13T12:01:00.000Z",
+    hypothesis: "The payment deployment is the likely initiating event.",
+    suggestedAction: "Rollback payment-service v1.8.3",
+  });
+
+  const timeline = manager.find("INC-1042")?.timeline ?? [];
+  assert.ok(timeline.some((event) => event.type === "AI_ANALYSIS_STARTED"));
+  assert.ok(timeline.some((event) => event.type === "AI_HYPOTHESIS_GENERATED" && /likely initiating event/.test(event.message)));
+  assert.ok(timeline.some((event) => event.type === "ACTION_SUGGESTED" && /Rollback/.test(event.message)));
+  assert.equal(changes.filter((event) => event.type === "incident-updated").length, 1);
+});

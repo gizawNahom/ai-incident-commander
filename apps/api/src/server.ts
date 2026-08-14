@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
 import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
+import { DeterministicInvestigator } from "../../../packages/ai/src/deterministic-investigator.ts";
 
 type AppOptions = { autoStart?: boolean };
 type RunningApp = {
@@ -29,6 +30,7 @@ function log(event: string, fields: Record<string, string>): void {
 export function createServer(options: AppOptions = {}): RunningApp {
   const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date() });
   const incidentManager = new IncidentManager();
+  const investigator = new DeterministicInvestigator();
   const streams = new Set<ServerResponse>();
   const unsubscribe = simulator.subscribe((event: SimulatorEvent) => {
     broadcast(streams, event);
@@ -66,6 +68,32 @@ export function createServer(options: AppOptions = {}): RunningApp {
     }
     if (url.pathname === "/api/incidents") {
       json(response, 200, { incidents: incidentManager.list() });
+      return;
+    }
+    if (url.pathname.startsWith("/api/incidents/") && url.pathname.endsWith("/investigate")) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      const incidentId = url.pathname.slice("/api/incidents/".length, -"/investigate".length);
+      const incident = incidentManager.find(incidentId);
+      if (!incident) {
+        json(response, 404, { error: "Incident not found", requestId });
+        return;
+      }
+      const system = simulator.snapshot();
+      const analysis = investigator.investigate({
+        incident,
+        services: system.services,
+        metricHistories: system.services.map((service) => simulator.history(service.id)),
+      });
+      incidentManager.recordInvestigation({
+        incidentId,
+        timestamp: system.timestamp,
+        hypothesis: analysis.hypotheses[0]?.inference ?? "No hypothesis could be generated from the available evidence.",
+        suggestedAction: analysis.suggestedAction ? `Rollback ${analysis.suggestedAction.targetServiceId} proposed` : undefined,
+      });
+      json(response, 200, analysis);
       return;
     }
     if (url.pathname.startsWith("/api/incidents/")) {
@@ -106,7 +134,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
       return;
     }
     const asset = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-    if (asset === "index.html" || asset === "incident.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "topology.js") {
+    if (asset === "index.html" || asset === "incident.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "topology.js" || asset === "investigation-view.js") {
       try {
         const body = await readFile(join(webRoot, asset));
         const contentType = asset.endsWith(".css") ? "text/css" : asset.endsWith(".js") ? "application/javascript" : "text/html";

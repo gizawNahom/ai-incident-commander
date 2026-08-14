@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --experimental-strip-types apps/api/src/server.ts",
-    "test": "node --experimental-strip-types --test apps/api/test/**/*.test.ts apps/web/test/**/*.test.js packages/domain/test/**/*.test.ts",
+    "test": "node --experimental-strip-types --test apps/api/test/**/*.test.ts apps/web/test/**/*.test.js packages/ai/test/**/*.test.ts packages/domain/test/**/*.test.ts",
     "check": "node --experimental-strip-types --check apps/api/src/server.ts"
   },
   "engines": {

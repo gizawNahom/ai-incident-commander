@@ -21,12 +21,18 @@
         <div><span>Environment</span><strong>Production</strong></div>
         <div><span>System health</span><strong id="system-health" class="healthy">Healthy</strong></div>
         <div><span>Services affected</span><strong id="affected-services">0</strong></div>
+        <div><span>Active incidents</span><strong id="active-incidents">0</strong></div>
         <div><span>Event stream</span><strong id="stream-status">Connecting</strong></div>
       </section>
 
       <section class="control-deck" aria-labelledby="chaos-title">
         <div><p class="eyebrow" id="chaos-title">Simulation controls</p><p>Safely reproduce an evidence-rich payment failure.</p></div>
         <div class="controls"><button class="button danger" id="trigger-deployment">Deploy payment-service v1.8.3</button><button class="button secondary" id="recover-system">Recover system</button></div>
+      </section>
+
+      <section class="incident-panel" id="incident-panel" hidden aria-labelledby="incident-title">
+        <div class="incident-heading"><div><p class="eyebrow">Active incident / automatic detection</p><h2 id="incident-title">Checkout payment failures</h2><p id="incident-subtitle">Correlated alerts created an incident.</p></div><div class="incident-tags"><strong id="incident-severity">SEV-1</strong><span id="incident-status">Detected</span></div></div>
+        <div class="incident-body"><div><p class="eyebrow">Why this was created</p><ul id="incident-alerts"></ul></div><div><p class="eyebrow">Incident timeline</p><ol id="incident-timeline"></ol></div></div>
       </section>
 
       <section class="metric-grid" aria-label="Key telemetry">

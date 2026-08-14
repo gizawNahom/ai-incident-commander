@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { TelemetrySimulator, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
+import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
 
 type AppOptions = { autoStart?: boolean };
 type RunningApp = {
@@ -27,11 +28,13 @@ function log(event: string, fields: Record<string, string>): void {
 
 export function createServer(options: AppOptions = {}): RunningApp {
   const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date() });
+  const incidentManager = new IncidentManager();
   const streams = new Set<ServerResponse>();
   const unsubscribe = simulator.subscribe((event: SimulatorEvent) => {
-    const streamEvent = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-    for (const stream of streams) stream.write(streamEvent);
+    broadcast(streams, event);
+    incidentManager.observe(event);
   });
+  const unsubscribeIncidents = incidentManager.subscribe((event: IncidentEvent) => broadcast(streams, event));
   let interval: NodeJS.Timeout | undefined;
 
   const httpServer: Server = createHttpServer(async (request, response) => {
@@ -50,6 +53,20 @@ export function createServer(options: AppOptions = {}): RunningApp {
     }
     if (url.pathname === "/api/system") {
       json(response, 200, simulator.snapshot());
+      return;
+    }
+    if (url.pathname === "/api/incidents") {
+      json(response, 200, { incidents: incidentManager.list() });
+      return;
+    }
+    if (url.pathname.startsWith("/api/incidents/")) {
+      const incidentId = url.pathname.slice("/api/incidents/".length);
+      const incident = incidentManager.find(incidentId);
+      if (!incident) {
+        json(response, 404, { error: "Incident not found", requestId });
+        return;
+      }
+      json(response, 200, incident);
       return;
     }
     if (url.pathname === "/api/simulator/bad-payment-deployment") {
@@ -107,10 +124,16 @@ export function createServer(options: AppOptions = {}): RunningApp {
     close: () => new Promise((resolve, reject) => {
       if (interval) clearInterval(interval);
       unsubscribe();
+      unsubscribeIncidents();
       for (const stream of streams) stream.end();
       httpServer.close((error) => error ? reject(error) : resolve());
     }),
   };
+}
+
+function broadcast(streams: ReadonlySet<ServerResponse>, event: SimulatorEvent | IncidentEvent): void {
+  const streamEvent = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  for (const stream of streams) stream.write(streamEvent);
 }
 
 if (process.argv[1]?.endsWith("server.ts")) {

@@ -1,5 +1,6 @@
 const byId = (id) => document.getElementById(id);
 const elements = {
+  activeIncidents: byId("active-incidents"),
   affected: byId("affected-services"),
   checkoutErrors: byId("checkout-errors"),
   description: byId("scenario-description"),
@@ -8,6 +9,13 @@ const elements = {
   focus: byId("service-focus"),
   gatewayTraffic: byId("gateway-traffic"),
   health: byId("system-health"),
+  incidentAlerts: byId("incident-alerts"),
+  incidentPanel: byId("incident-panel"),
+  incidentSeverity: byId("incident-severity"),
+  incidentStatus: byId("incident-status"),
+  incidentSubtitle: byId("incident-subtitle"),
+  incidentTimeline: byId("incident-timeline"),
+  incidentTitle: byId("incident-title"),
   paymentLatency: byId("payment-latency"),
   recover: byId("recover-system"),
   redisLatency: byId("redis-latency"),
@@ -19,6 +27,7 @@ const elements = {
 };
 
 let system;
+let incident;
 let selectedServiceId = "payment-service";
 const events = [];
 
@@ -67,6 +76,30 @@ function renderSystem(nextSystem) {
   renderFocus();
 }
 
+function renderIncident(nextIncident) {
+  incident = nextIncident;
+  elements.activeIncidents.textContent = incident ? "1" : "0";
+  if (!incident) {
+    elements.incidentPanel.hidden = true;
+    return;
+  }
+  elements.incidentPanel.hidden = false;
+  elements.incidentTitle.textContent = `${incident.id} — ${incident.title}`;
+  elements.incidentSeverity.textContent = incident.severity;
+  elements.incidentStatus.textContent = incident.status;
+  elements.incidentSubtitle.textContent = `Created at ${new Date(incident.startedAt).toLocaleTimeString()} after correlated Payment and Checkout alerts.`;
+  elements.incidentAlerts.replaceChildren(...incident.alerts.map((alert) => {
+    const item = document.createElement("li");
+    item.textContent = `${alert.title}: ${formatNumber(alert.observedValue)}${alert.unit} observed`;
+    return item;
+  }));
+  elements.incidentTimeline.replaceChildren(...incident.timeline.map((entry) => {
+    const item = document.createElement("li");
+    item.innerHTML = `<time>${new Date(entry.timestamp).toLocaleTimeString()}</time><span class="timeline-type">${entry.type.replaceAll("_", " ")}</span>${entry.message}`;
+    return item;
+  }));
+}
+
 function renderFocus() {
   const service = getService(selectedServiceId);
   if (!service) return;
@@ -76,12 +109,17 @@ function renderFocus() {
 
 function addEvent(event) {
   if (event.type === "telemetry" || event.type === "system") return;
-  events.unshift(event);
+  const normalized = event.type === "alert-triggered"
+    ? { type: "alert", timestamp: event.alert.triggeredAt, level: "warn", message: event.alert.title }
+    : event.type === "incident-created"
+      ? { type: "incident", timestamp: event.incident.startedAt, level: "error", message: `${event.incident.id} created: ${event.incident.title}` }
+      : event;
+  events.unshift(normalized);
   if (events.length > 8) events.pop();
   elements.eventCount.textContent = `${events.length} event${events.length === 1 ? "" : "s"}`;
   elements.eventList.replaceChildren(...events.map((item) => {
     const row = document.createElement("li");
-    const level = item.type === "log" ? item.level : "";
+    const level = item.type === "log" || item.type === "alert" || item.type === "incident" ? item.level : "";
     const message = item.message;
     row.innerHTML = `<time>${new Date(item.timestamp).toLocaleTimeString()}</time><span class="event-kind ${level}">${item.type}${level ? ` / ${level}` : ""}</span><span>${message}</span>`;
     return row;
@@ -104,9 +142,16 @@ elements.trigger.addEventListener("click", () => sendControl("/api/simulator/bad
 elements.recover.addEventListener("click", () => sendControl("/api/simulator/recover", elements.recover));
 
 fetch("/api/system").then((response) => response.json()).then(renderSystem).catch(() => { elements.description.textContent = "Unable to load the simulator snapshot."; });
+fetch("/api/incidents").then((response) => response.json()).then((payload) => renderIncident(payload.incidents[0])).catch(() => renderIncident(undefined));
 const liveEvents = new EventSource("/api/events");
 liveEvents.addEventListener("open", () => { elements.stream.textContent = "Streaming"; });
 liveEvents.addEventListener("system", (event) => renderSystem(JSON.parse(event.data).system));
 liveEvents.addEventListener("deployment", (event) => addEvent(JSON.parse(event.data)));
 liveEvents.addEventListener("log", (event) => addEvent(JSON.parse(event.data)));
+liveEvents.addEventListener("alert-triggered", (event) => addEvent(JSON.parse(event.data)));
+liveEvents.addEventListener("incident-created", (event) => {
+  const change = JSON.parse(event.data);
+  addEvent(change);
+  renderIncident(change.incident);
+});
 liveEvents.addEventListener("error", () => { elements.stream.textContent = "Reconnecting"; });

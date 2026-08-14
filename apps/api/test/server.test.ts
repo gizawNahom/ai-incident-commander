@@ -63,3 +63,26 @@ test("simulator controls trigger a bad deployment and expose propagated state th
     await app.close();
   }
 });
+
+test("incidents API exposes the incident created from correlated simulator alerts", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const response = await fetch(`${address}/api/incidents`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.incidents.length, 1);
+    assert.equal(payload.incidents[0].id, "INC-1042");
+    assert.equal(payload.incidents[0].title, "Checkout Service degradation");
+    assert.equal(payload.incidents[0].alerts.length, 2);
+  } finally {
+    await app.close();
+  }
+});

@@ -1,0 +1,14 @@
+{
+  "name": "ai-incident-commander",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types apps/api/src/server.ts",
+    "test": "node --experimental-strip-types --test apps/api/test/**/*.test.ts packages/domain/test/**/*.test.ts",
+    "check": "node --experimental-strip-types --check apps/api/src/server.ts"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

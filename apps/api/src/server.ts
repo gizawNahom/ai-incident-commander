@@ -97,7 +97,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
       return;
     }
     const asset = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-    if (asset === "index.html" || asset === "styles.css" || asset === "app.js") {
+    if (asset === "index.html" || asset === "styles.css" || asset === "app.js" || asset === "topology.js") {
       try {
         const body = await readFile(join(webRoot, asset));
         const contentType = asset.endsWith(".css") ? "text/css" : asset.endsWith(".js") ? "application/javascript" : "text/html";

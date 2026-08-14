@@ -1,3 +1,5 @@
+import { buildTopologyGraph } from "./topology.js";
+
 const byId = (id) => document.getElementById(id);
 const elements = {
   activeIncidents: byId("active-incidents"),
@@ -47,6 +49,7 @@ function scenarioCopy(name) {
 
 function renderSystem(nextSystem) {
   system = nextSystem;
+  if (!getService(selectedServiceId)) selectedServiceId = system.services[0]?.id;
   const payment = getService("payment-service");
   const checkout = getService("checkout-service");
   const redis = getService("redis");
@@ -65,15 +68,57 @@ function renderSystem(nextSystem) {
   elements.redisLatency.textContent = formatNumber(redis.metrics.latencyMs);
   elements.gatewayTraffic.textContent = formatNumber(gateway.metrics.trafficRpm);
 
-  elements.serviceGrid.replaceChildren(...system.services.map((service) => {
+  renderTopology();
+  renderFocus();
+}
+
+function renderTopology() {
+  const graph = buildTopologyGraph(system.services);
+  const canvas = document.createElement("div");
+  canvas.className = "topology-canvas";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("topology-lines");
+  svg.setAttribute("viewBox", "0 0 1000 480");
+  svg.setAttribute("aria-hidden", "true");
+  const definitions = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+  marker.setAttribute("id", "dependency-arrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "8");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  arrow.classList.add("topology-arrow");
+  marker.append(arrow);
+  definitions.append(marker);
+  svg.append(definitions);
+  for (const edge of graph.edges) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const startX = edge.fromNode.x * 10 + 78;
+    const startY = edge.fromNode.y * 4.8;
+    const endX = edge.toNode.x * 10 - 78;
+    const endY = edge.toNode.y * 4.8;
+    const midpoint = (startX + endX) / 2;
+    path.setAttribute("d", `M ${startX} ${startY} C ${midpoint} ${startY}, ${midpoint} ${endY}, ${endX} ${endY}`);
+    path.setAttribute("marker-end", "url(#dependency-arrow)");
+    path.classList.add("topology-edge", edge.health);
+    svg.append(path);
+  }
+  canvas.append(svg);
+  for (const service of graph.nodes) {
     const node = document.createElement("button");
     node.className = `service ${service.health}${selectedServiceId === service.id ? " selected" : ""}`;
     node.type = "button";
+    node.style.left = `${service.x}%`;
+    node.style.top = `${service.y}%`;
     node.innerHTML = `<small>${service.kind} · ${service.health}</small><strong>${service.name}</strong><span>${formatNumber(service.metrics.latencyMs)} ms p95</span>`;
-    node.addEventListener("click", () => { selectedServiceId = service.id; renderSystem(system); });
-    return node;
-  }));
-  renderFocus();
+    node.addEventListener("click", () => { selectedServiceId = service.id; renderTopology(); renderFocus(); });
+    canvas.append(node);
+  }
+  elements.serviceGrid.replaceChildren(canvas);
 }
 
 function renderIncident(nextIncident) {

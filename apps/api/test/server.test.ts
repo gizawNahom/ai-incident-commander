@@ -20,6 +20,20 @@ test("health endpoint returns an operational snapshot with a request id", async 
   }
 });
 
+test("topology module is served to the live dashboard", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    const response = await fetch(`${address}/topology.js`);
+
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /buildTopologyGraph/);
+  } finally {
+    await app.close();
+  }
+});
+
 test("telemetry endpoint streams simulator updates as SSE", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();

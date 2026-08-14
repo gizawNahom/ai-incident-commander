@@ -34,6 +34,31 @@ test("topology module is served to the live dashboard", async () => {
   }
 });
 
+test("incident room assets and bounded metric history are available to investigators", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const room = await fetch(`${address}/incident.html?id=INC-1042`);
+    const history = await fetch(`${address}/api/telemetry/history?service=payment-service`);
+    const payload = await history.json();
+
+    assert.equal(room.status, 200);
+    assert.match(await room.text(), /Incident Room/);
+    assert.equal(history.status, 200);
+    assert.equal(payload.serviceId, "payment-service");
+    assert.equal(payload.samples.length, 4);
+    assert.ok(payload.samples.at(-1).latencyMs > 1_000);
+  } finally {
+    await app.close();
+  }
+});
+
 test("telemetry endpoint streams simulator updates as SSE", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();

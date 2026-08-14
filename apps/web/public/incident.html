@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Incident Room · AI Incident Commander</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="room-page">
+    <main class="room-shell">
+      <a class="back-link" href="/">← System overview</a>
+      <header class="room-header" id="room-header">
+        <p class="eyebrow">Incident room / live investigation</p>
+        <h1>Loading incident…</h1>
+      </header>
+      <p class="room-error" id="room-error" hidden></p>
+
+      <section class="room-summary" id="room-summary" hidden>
+        <div><span>Severity</span><strong id="room-severity">—</strong></div>
+        <div><span>Status</span><strong id="room-status">—</strong></div>
+        <div><span>Affected services</span><strong id="room-services">—</strong></div>
+        <div><span>Alerts</span><strong id="room-alert-count">—</strong></div>
+      </section>
+
+      <section class="room-workbench" id="room-workbench" hidden>
+        <article class="room-topology-panel">
+          <div class="section-heading"><div><p class="eyebrow">Affected dependency path</p><h2>Live topology</h2></div><span class="mono">Highlighted by incident evidence</span></div>
+          <div class="room-topology" id="room-topology" aria-label="Incident service dependency graph"></div>
+        </article>
+        <aside class="evidence-panel">
+          <p class="eyebrow">Detection evidence</p>
+          <h2>Why this incident exists</h2>
+          <ul id="room-alerts"></ul>
+        </aside>
+      </section>
+
+      <section class="room-metrics" id="room-metrics" hidden aria-label="Incident metrics">
+        <article><div><p class="eyebrow">Payment</p><h2>Latency p95</h2></div><strong id="payment-current">—</strong><div class="metric-chart" id="payment-chart"></div></article>
+        <article><div><p class="eyebrow">Checkout</p><h2>Error rate</h2></div><strong id="checkout-current">—</strong><div class="metric-chart warning" id="checkout-chart"></div></article>
+        <article><div><p class="eyebrow">Redis</p><h2>Latency p95</h2></div><strong id="redis-current">—</strong><div class="metric-chart warning" id="redis-chart"></div></article>
+      </section>
+
+      <section class="room-evidence-grid" id="room-evidence" hidden>
+        <article class="room-timeline"><div class="section-heading"><div><p class="eyebrow">Unified timeline</p><h2>What changed</h2></div><span class="mono" id="timeline-count">0 events</span></div><ol id="room-timeline"></ol></article>
+        <aside class="room-logs"><div class="section-heading"><div><p class="eyebrow">Relevant logs</p><h2>Live evidence</h2></div></div><ol id="room-logs"><li class="empty">No relevant logs yet.</li></ol></aside>
+      </section>
+    </main>
+    <script type="module" src="/incident.js"></script>
+  </body>
+</html>

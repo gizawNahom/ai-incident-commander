@@ -81,3 +81,18 @@ test("recovering the system restores healthy versions and service health", () =>
   assert.equal(payment?.health, "healthy");
   assert.equal(checkout?.health, "healthy");
 });
+
+test("simulator retains bounded metric history for incident investigation", () => {
+  const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date("2026-08-13T12:00:00.000Z") });
+  simulator.triggerBadPaymentDeployment();
+  simulator.advance();
+  simulator.advance();
+  simulator.advance();
+
+  const history = simulator.history("payment-service");
+
+  assert.equal(history.serviceId, "payment-service");
+  assert.equal(history.samples.length, 4);
+  assert.ok(history.samples.at(-1)?.latencyMs > 1_000);
+  assert.ok(history.samples.every((sample) => sample.timestamp === "2026-08-13T12:00:00.000Z"));
+});

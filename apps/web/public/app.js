@@ -13,6 +13,7 @@ const elements = {
   health: byId("system-health"),
   incidentAlerts: byId("incident-alerts"),
   incidentPanel: byId("incident-panel"),
+  incidentRoomLink: byId("incident-room-link"),
   incidentSeverity: byId("incident-severity"),
   incidentStatus: byId("incident-status"),
   incidentSubtitle: byId("incident-subtitle"),
@@ -130,6 +131,7 @@ function renderIncident(nextIncident) {
   }
   elements.incidentPanel.hidden = false;
   elements.incidentTitle.textContent = `${incident.id} — ${incident.title}`;
+  elements.incidentRoomLink.href = `/incident.html?id=${encodeURIComponent(incident.id)}`;
   elements.incidentSeverity.textContent = incident.severity;
   elements.incidentStatus.textContent = incident.status;
   elements.incidentSubtitle.textContent = `Created at ${new Date(incident.startedAt).toLocaleTimeString()} after correlated Payment and Checkout alerts.`;

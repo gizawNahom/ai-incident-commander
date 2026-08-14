@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-import { TelemetrySimulator, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
+import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
 import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
 
 type AppOptions = { autoStart?: boolean };
@@ -49,6 +49,15 @@ export function createServer(options: AppOptions = {}): RunningApp {
     }
     if (url.pathname === "/api/telemetry/current") {
       json(response, 200, simulator.current());
+      return;
+    }
+    if (url.pathname === "/api/telemetry/history") {
+      const serviceId = url.searchParams.get("service");
+      if (!isServiceId(serviceId)) {
+        json(response, 400, { error: "A valid service query parameter is required", requestId });
+        return;
+      }
+      json(response, 200, simulator.history(serviceId));
       return;
     }
     if (url.pathname === "/api/system") {
@@ -97,7 +106,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
       return;
     }
     const asset = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-    if (asset === "index.html" || asset === "styles.css" || asset === "app.js" || asset === "topology.js") {
+    if (asset === "index.html" || asset === "incident.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "topology.js") {
       try {
         const body = await readFile(join(webRoot, asset));
         const contentType = asset.endsWith(".css") ? "text/css" : asset.endsWith(".js") ? "application/javascript" : "text/html";
@@ -134,6 +143,10 @@ export function createServer(options: AppOptions = {}): RunningApp {
 function broadcast(streams: ReadonlySet<ServerResponse>, event: SimulatorEvent | IncidentEvent): void {
   const streamEvent = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const stream of streams) stream.write(streamEvent);
+}
+
+function isServiceId(value: string | null): value is ServiceId {
+  return value !== null && serviceIds.includes(value as ServiceId);
 }
 
 if (process.argv[1]?.endsWith("server.ts")) {

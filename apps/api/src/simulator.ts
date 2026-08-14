@@ -37,6 +37,9 @@ export type SystemSnapshot = {
   readonly services: readonly ServiceSnapshot[];
 };
 
+export type MetricHistorySample = ServiceMetrics & { readonly timestamp: string };
+export type MetricHistory = { readonly serviceId: ServiceId; readonly samples: readonly MetricHistorySample[] };
+
 export type TelemetrySample = {
   readonly type: "telemetry";
   readonly timestamp: string;
@@ -101,11 +104,13 @@ export class TelemetrySimulator {
   private recoveryTicks = 0;
   private latest: TelemetrySample;
   private system: SystemSnapshot;
+  private readonly historyByService = new Map<ServiceId, MetricHistorySample[]>();
 
   constructor(options: SimulatorOptions) {
     this.options = options;
     this.state = options.seed;
     this.system = this.buildSystem();
+    this.recordHistory(this.system);
     this.latest = this.toGatewaySample(this.system);
   }
 
@@ -120,6 +125,10 @@ export class TelemetrySimulator {
 
   snapshot(): SystemSnapshot {
     return this.system;
+  }
+
+  history(serviceId: ServiceId): MetricHistory {
+    return { serviceId, samples: [...(this.historyByService.get(serviceId) ?? [])] };
   }
 
   triggerBadPaymentDeployment(): void {
@@ -161,6 +170,7 @@ export class TelemetrySimulator {
       }
     }
     this.system = this.buildSystem();
+    this.recordHistory(this.system);
     this.latest = this.toGatewaySample(this.system);
     this.emit(this.latest);
     this.emitFailureLogs();
@@ -237,6 +247,15 @@ export class TelemetrySimulator {
     this.emit({ type: "log", timestamp, serviceId: "redis", level: "warn", message: `redis request wait exceeded ${this.degradationStage * 35}ms` });
     this.emit({ type: "log", timestamp, serviceId: "payment-service", level: "error", message: "redis connection pool timeout: checkout authorization delayed" });
     this.emit({ type: "log", timestamp, serviceId: "checkout-service", level: "error", message: "payment authorization request timed out" });
+  }
+
+  private recordHistory(system: SystemSnapshot): void {
+    for (const service of system.services) {
+      const samples = this.historyByService.get(service.id) ?? [];
+      samples.push({ timestamp: system.timestamp, ...service.metrics });
+      if (samples.length > 120) samples.shift();
+      this.historyByService.set(service.id, samples);
+    }
   }
 
   private emit(event: SimulatorEvent): void {

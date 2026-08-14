@@ -3,10 +3,16 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-import { TelemetrySimulator, type TelemetrySample } from "./simulator.ts";
+import { TelemetrySimulator, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
 
 type AppOptions = { autoStart?: boolean };
-type RunningApp = { listen: () => Promise<string>; close: () => Promise<void>; advance: () => TelemetrySample };
+type RunningApp = {
+  listen: () => Promise<string>;
+  close: () => Promise<void>;
+  advance: () => TelemetrySample;
+  triggerBadPaymentDeployment: () => void;
+  recover: () => void;
+};
 
 const webRoot = join(process.cwd(), "apps/web/public");
 
@@ -22,9 +28,9 @@ function log(event: string, fields: Record<string, string>): void {
 export function createServer(options: AppOptions = {}): RunningApp {
   const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date() });
   const streams = new Set<ServerResponse>();
-  const unsubscribe = simulator.subscribe((sample) => {
-    const event = `event: telemetry\ndata: ${JSON.stringify(sample)}\n\n`;
-    for (const stream of streams) stream.write(event);
+  const unsubscribe = simulator.subscribe((event: SimulatorEvent) => {
+    const streamEvent = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+    for (const stream of streams) stream.write(streamEvent);
   });
   let interval: NodeJS.Timeout | undefined;
 
@@ -42,10 +48,33 @@ export function createServer(options: AppOptions = {}): RunningApp {
       json(response, 200, simulator.current());
       return;
     }
+    if (url.pathname === "/api/system") {
+      json(response, 200, simulator.snapshot());
+      return;
+    }
+    if (url.pathname === "/api/simulator/bad-payment-deployment") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      simulator.triggerBadPaymentDeployment();
+      json(response, 202, { scenario: "bad-payment-deployment" });
+      return;
+    }
+    if (url.pathname === "/api/simulator/recover") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      simulator.recover();
+      json(response, 202, { scenario: "recovering" });
+      return;
+    }
     if (url.pathname === "/api/events") {
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
       response.write("retry: 2000\n\n");
       response.write(`event: telemetry\ndata: ${JSON.stringify(simulator.current())}\n\n`);
+      response.write(`event: system\ndata: ${JSON.stringify({ type: "system", system: simulator.snapshot() })}\n\n`);
       streams.add(response);
       request.on("close", () => streams.delete(response));
       return;
@@ -68,6 +97,8 @@ export function createServer(options: AppOptions = {}): RunningApp {
   if (options.autoStart !== false) interval = setInterval(() => simulator.advance(), 2_000);
   return {
     advance: () => simulator.advance(),
+    triggerBadPaymentDeployment: () => simulator.triggerBadPaymentDeployment(),
+    recover: () => simulator.recover(),
     listen: () => new Promise((resolve) => httpServer.listen(0, "127.0.0.1", () => {
       const address = httpServer.address();
       if (!address || typeof address === "string") throw new Error("Unable to resolve bound API address");

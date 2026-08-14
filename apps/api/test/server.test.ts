@@ -40,3 +40,26 @@ test("telemetry endpoint streams simulator updates as SSE", async () => {
     await app.close();
   }
 });
+
+test("simulator controls trigger a bad deployment and expose propagated state through the snapshot API", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    const trigger = await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    assert.equal(trigger.status, 202);
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const response = await fetch(`${address}/api/system`);
+    const system = await response.json();
+    const payment = system.services.find((service: { id: string }) => service.id === "payment-service");
+
+    assert.equal(system.scenario, "bad-payment-deployment");
+    assert.equal(payment.version, "v1.8.3");
+    assert.equal(payment.health, "critical");
+  } finally {
+    await app.close();
+  }
+});

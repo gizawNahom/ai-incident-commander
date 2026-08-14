@@ -8,14 +8,48 @@
   </head>
   <body>
     <main>
-      <header>
-        <p class="eyebrow"><span class="pulse"></span> Command Center / Live</p>
-        <div class="heading"><div><h1>System Overview</h1><p>Production telemetry is flowing normally.</p></div><span class="clock" id="updated-at">Connecting…</span></div>
+      <header class="masthead">
+        <div>
+          <p class="eyebrow"><span class="pulse"></span> Command center / live simulation</p>
+          <h1>System Overview</h1>
+          <p class="subhead" id="scenario-description">Loading system topology…</p>
+        </div>
+        <div class="header-meta"><span id="updated-at">Connecting…</span><strong id="scenario-badge">Starting</strong></div>
       </header>
-      <section class="status-strip" aria-label="Current system status"><div><span>Environment</span><strong>Production</strong></div><div><span>System health</span><strong class="healthy">Healthy</strong></div><div><span>Active incidents</span><strong>0</strong></div><div><span>Event stream</span><strong id="stream-status">Connecting</strong></div></section>
-      <section class="dashboard" aria-label="Live service telemetry">
-        <article class="service-card"><div class="card-heading"><div><p class="eyebrow">Gateway / Request latency</p><h2>API Gateway</h2></div><span class="health-dot"></span></div><div class="metric"><strong id="latency-value">—</strong><span>ms p95</span></div><div class="sparkline" id="sparkline" aria-label="Latency history"></div><footer><span>Normal operating range</span><strong>80–130 ms</strong></footer></article>
-        <aside class="activity"><p class="eyebrow">Event stream</p><h2>Simulator online</h2><p>Healthy telemetry samples arrive every two seconds through a persistent connection.</p><div class="event" id="event-message">Awaiting first sample…</div></aside>
+
+      <section class="status-strip" aria-label="Current system status">
+        <div><span>Environment</span><strong>Production</strong></div>
+        <div><span>System health</span><strong id="system-health" class="healthy">Healthy</strong></div>
+        <div><span>Services affected</span><strong id="affected-services">0</strong></div>
+        <div><span>Event stream</span><strong id="stream-status">Connecting</strong></div>
+      </section>
+
+      <section class="control-deck" aria-labelledby="chaos-title">
+        <div><p class="eyebrow" id="chaos-title">Simulation controls</p><p>Safely reproduce an evidence-rich payment failure.</p></div>
+        <div class="controls"><button class="button danger" id="trigger-deployment">Deploy payment-service v1.8.3</button><button class="button secondary" id="recover-system">Recover system</button></div>
+      </section>
+
+      <section class="metric-grid" aria-label="Key telemetry">
+        <article><span>Payment latency</span><strong id="payment-latency">—</strong><small>p95 ms</small></article>
+        <article><span>Checkout error rate</span><strong id="checkout-errors">—</strong><small>percent</small></article>
+        <article><span>Redis latency</span><strong id="redis-latency">—</strong><small>p95 ms</small></article>
+        <article><span>Gateway traffic</span><strong id="gateway-traffic">—</strong><small>requests / min</small></article>
+      </section>
+
+      <section class="workbench">
+        <article class="topology-panel">
+          <div class="section-heading"><div><p class="eyebrow">Service topology</p><h2>Dependency map</h2></div><span class="legend"><i class="healthy-dot"></i> Healthy <i class="degraded-dot"></i> Degraded <i class="critical-dot"></i> Critical</span></div>
+          <div class="topology" id="service-grid" aria-label="Interactive service topology"></div>
+        </article>
+        <aside class="focus-panel" aria-live="polite">
+          <p class="eyebrow">Selected service</p>
+          <div id="service-focus"><h2>Loading…</h2><p>Receiving current service data.</p></div>
+        </aside>
+      </section>
+
+      <section class="event-panel" aria-labelledby="event-title">
+        <div class="section-heading"><div><p class="eyebrow">Operational evidence</p><h2 id="event-title">Live event stream</h2></div><span class="mono" id="event-count">0 events</span></div>
+        <ol id="event-list"><li class="empty">Waiting for simulator activity…</li></ol>
       </section>
     </main>
     <script src="/app.js"></script>

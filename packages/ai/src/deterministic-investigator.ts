@@ -63,6 +63,8 @@ export type ProposedMitigation = {
 };
 
 export type Investigation = {
+  readonly source: "deterministic" | "gemini";
+  readonly fallbackReason?: string;
   readonly summary: string;
   readonly knownEvidence: readonly KnownEvidence[];
   readonly hypotheses: readonly InvestigationHypothesis[];
@@ -71,7 +73,7 @@ export type Investigation = {
 };
 
 export interface IncidentInvestigator {
-  investigate(context: InvestigationContext): Investigation;
+  investigate(context: InvestigationContext): Investigation | Promise<Investigation>;
 }
 
 /**
@@ -106,6 +108,7 @@ export class DeterministicInvestigator implements IncidentInvestigator {
         } satisfies InvestigationHypothesis;
 
     return {
+      source: "deterministic",
       summary,
       knownEvidence,
       hypotheses: [hypothesis],

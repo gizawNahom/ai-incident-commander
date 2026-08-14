@@ -3,6 +3,7 @@ export function buildInvestigationView(analysis) {
   if (!hypothesis || !Array.isArray(analysis.knownEvidence)) throw new Error("Investigation response is incomplete");
 
   return {
+    sourceLabel: sourceLabel(analysis),
     summary: analysis.summary,
     confidenceLabel: `${capitalize(hypothesis.confidence)} confidence`,
     inference: hypothesis.inference,
@@ -19,6 +20,12 @@ export function buildInvestigationView(analysis) {
         }
       : undefined,
   };
+}
+
+function sourceLabel(analysis) {
+  if (analysis.source === "gemini") return "Gemini-assisted · citations validated";
+  if (analysis.fallbackReason) return "Offline fallback · provider unavailable";
+  return "Deterministic evidence analysis";
 }
 
 function capitalize(value) {

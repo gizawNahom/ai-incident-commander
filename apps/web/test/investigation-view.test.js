@@ -5,6 +5,7 @@ import { buildInvestigationView } from "../public/investigation-view.js";
 
 test("creates a view model that keeps known evidence, inference, and uncertainty distinct", () => {
   const view = buildInvestigationView({
+    source: "gemini",
     summary: "Storefront degradation has 2 correlated alerts affecting Storefront and Orders Worker.",
     knownEvidence: [
       { id: "deployment", kind: "deployment", serviceId: "orders-worker", detail: "orders-worker v9.0.0 deployment completed" },
@@ -16,6 +17,7 @@ test("creates a view model that keeps known evidence, inference, and uncertainty
   });
 
   assert.equal(view.confidenceLabel, "High confidence");
+  assert.equal(view.sourceLabel, "Gemini-assisted · citations validated");
   assert.deepEqual(view.evidence, [
     "orders-worker v9.0.0 deployment completed",
     "Latency increased from 120 ms to 1,430 ms.",

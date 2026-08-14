@@ -34,7 +34,7 @@ docs/adr/              concise architectural decisions
 2. Distributed simulator: services, dependencies, baseline telemetry, and failure scenarios.
 3. Detection: alerts, incident lifecycle, timeline, and audit stream.
 4. Incident Room: topology, evidence, metrics, logs, and timeline.
-5. Grounded investigator: deterministic analysis first; optional provider adapter later.
+5. Grounded investigator: deterministic analysis first; optional Gemini Developer API adapter behind the same port. Provider output is schema-shaped and locally checked against the evidence catalog; absent, failed, or invalid provider output falls back to deterministic analysis.
 6. Human approval: proposed mitigations, RBAC, approval trail, simulated execution.
 7. Deterministic demo story and end-to-end coverage.
 8. PostgreSQL persistence, Next.js UI migration, polish, and deployment.

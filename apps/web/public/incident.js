@@ -77,6 +77,7 @@ function element(tag, className, content) {
 
 function renderInvestigation(analysis) {
   const view = buildInvestigationView(analysis);
+  const source = element("span", "analysis-source", view.sourceLabel);
   const summary = element("p", "investigation-summary", view.summary);
   const hypothesis = element("article", "hypothesis-card");
   hypothesis.append(element("span", "confidence", view.confidenceLabel), element("h3", "", "Primary hypothesis"), element("p", "", view.inference));
@@ -85,7 +86,7 @@ function renderInvestigation(analysis) {
   evidence.append(...view.evidence.map((detail) => element("li", "", detail)));
   hypothesis.append(evidenceHeading, evidence);
   const uncertainty = element("p", "uncertainty", `Uncertainty: ${view.uncertainty}`);
-  elements.investigationResult.replaceChildren(summary, hypothesis, uncertainty);
+  elements.investigationResult.replaceChildren(source, summary, hypothesis, uncertainty);
   if (view.action) {
     const action = element("aside", "proposed-action");
     action.append(

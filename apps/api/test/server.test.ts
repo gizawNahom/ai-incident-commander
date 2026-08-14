@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createServer } from "../src/server.ts";
+import type { IncidentInvestigator } from "../../../packages/ai/src/deterministic-investigator.ts";
 
 test("health endpoint returns an operational snapshot with a request id", async () => {
   const app = createServer({ autoStart: false });
@@ -87,6 +88,30 @@ test("investigation endpoint returns grounded evidence and only proposes a mitig
       risk: "medium",
       rationale: "The deployment immediately preceded the observed degradation.",
     });
+    assert.equal(system.scenario, "bad-payment-deployment");
+  } finally {
+    await app.close();
+  }
+});
+
+test("a failed optional AI provider falls back to the deterministic investigator without changing simulator state", async () => {
+  const failingProvider: IncidentInvestigator = { investigate: async () => { throw new Error("provider unavailable"); } };
+  const app = createServer({ autoStart: false, investigator: failingProvider });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const response = await fetch(`${address}/api/incidents/INC-1042/investigate`, { method: "POST" });
+    const analysis = await response.json();
+    const system = await (await fetch(`${address}/api/system`)).json();
+
+    assert.equal(response.status, 200);
+    assert.equal(analysis.source, "deterministic");
+    assert.match(analysis.fallbackReason, /AI provider unavailable/i);
     assert.equal(system.scenario, "bad-payment-deployment");
   } finally {
     await app.close();

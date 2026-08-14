@@ -5,9 +5,10 @@ import { join } from "node:path";
 
 import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
 import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
-import { DeterministicInvestigator } from "../../../packages/ai/src/deterministic-investigator.ts";
+import { DeterministicInvestigator, type IncidentInvestigator, type Investigation } from "../../../packages/ai/src/deterministic-investigator.ts";
+import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
 
-type AppOptions = { autoStart?: boolean };
+type AppOptions = { readonly autoStart?: boolean; readonly investigator?: IncidentInvestigator };
 type RunningApp = {
   listen: () => Promise<string>;
   close: () => Promise<void>;
@@ -30,7 +31,8 @@ function log(event: string, fields: Record<string, string>): void {
 export function createServer(options: AppOptions = {}): RunningApp {
   const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date() });
   const incidentManager = new IncidentManager();
-  const investigator = new DeterministicInvestigator();
+  const deterministicInvestigator = new DeterministicInvestigator();
+  const investigator = options.investigator ?? configuredInvestigator(deterministicInvestigator);
   const streams = new Set<ServerResponse>();
   const unsubscribe = simulator.subscribe((event: SimulatorEvent) => {
     broadcast(streams, event);
@@ -82,11 +84,18 @@ export function createServer(options: AppOptions = {}): RunningApp {
         return;
       }
       const system = simulator.snapshot();
-      const analysis = investigator.investigate({
+      const context = {
         incident,
         services: system.services,
         metricHistories: system.services.map((service) => simulator.history(service.id)),
-      });
+      };
+      let analysis: Investigation;
+      try {
+        analysis = await investigator.investigate(context);
+      } catch {
+        log("investigation_provider_fallback", { requestId, reason: "provider_unavailable" });
+        analysis = { ...deterministicInvestigator.investigate(context), fallbackReason: "AI provider unavailable; offline evidence analysis shown." };
+      }
       incidentManager.recordInvestigation({
         incidentId,
         timestamp: system.timestamp,
@@ -166,6 +175,14 @@ export function createServer(options: AppOptions = {}): RunningApp {
       httpServer.close((error) => error ? reject(error) : resolve());
     }),
   };
+}
+
+function configuredInvestigator(fallback: DeterministicInvestigator): IncidentInvestigator {
+  if (process.env.AI_INCIDENT_COMMANDER_AI_PROVIDER !== "gemini" || !process.env.GEMINI_API_KEY) return fallback;
+  return new GeminiInvestigator(new GeminiGenerateContentTransport({
+    apiKey: process.env.GEMINI_API_KEY,
+    model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite",
+  }), fallback);
 }
 
 function broadcast(streams: ReadonlySet<ServerResponse>, event: SimulatorEvent | IncidentEvent): void {

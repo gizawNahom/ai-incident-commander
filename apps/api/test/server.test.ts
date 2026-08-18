@@ -35,6 +35,147 @@ test("topology module is served to the live dashboard", async () => {
   }
 });
 
+test("alert policy API exposes seeded policies, updates valid policies, and rejects invalid policy input", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    const initialResponse = await fetch(`${address}/api/alert-policies`);
+    const initial = await initialResponse.json();
+    assert.equal(initialResponse.status, 200);
+    assert.ok(initial.policies.some((policy: { id: string; scope: { type: string } }) => policy.id === "latency-critical" && policy.scope.type === "ALL_SERVICES"));
+
+    const update = await fetch(`${address}/api/alert-policies/latency-critical`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Payment latency safeguard",
+        metric: "latencyMs",
+        comparator: "GREATER_THAN",
+        threshold: 900,
+        breachDurationSeconds: 10,
+        severity: "SEV-2",
+        enabled: true,
+        scope: { type: "SELECTED_SERVICES", serviceIds: ["payment-service"] },
+      }),
+    });
+    const changed = await update.json();
+    assert.equal(update.status, 200);
+    assert.equal(changed.policy.threshold, 900);
+    assert.deepEqual(changed.policy.scope, { type: "SELECTED_SERVICES", serviceIds: ["payment-service"] });
+
+    const createdResponse = await fetch(`${address}/api/alert-policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Checkout error-rate safeguard",
+        metric: "errorRate",
+        comparator: "GREATER_THAN",
+        threshold: 5,
+        breachDurationSeconds: 0,
+        severity: "SEV-3",
+        enabled: true,
+        scope: { type: "SELECTED_SERVICES", serviceIds: ["checkout-service"] },
+      }),
+    });
+    const created = await createdResponse.json();
+    assert.equal(createdResponse.status, 201);
+    assert.match(created.policy.id, /^POL-/);
+    assert.equal(created.policy.metric, "errorRate");
+
+    const invalid = await fetch(`${address}/api/alert-policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metric: "latencyMs", threshold: -1 }),
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test("an alert policy scope changes which alerts the existing bad-deployment simulation can correlate", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+  const latencyPolicy = {
+    name: "Latency only on checkout",
+    metric: "latencyMs",
+    comparator: "GREATER_THAN",
+    threshold: 1_000,
+    breachDurationSeconds: 0,
+    severity: "SEV-1",
+    enabled: true,
+    scope: { type: "SELECTED_SERVICES", serviceIds: ["checkout-service"] },
+  };
+
+  try {
+    const update = await fetch(`${address}/api/alert-policies/latency-critical`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(latencyPolicy),
+    });
+    assert.equal(update.status, 200);
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const withoutPaymentLatency = await (await fetch(`${address}/api/incidents`)).json();
+    assert.equal(withoutPaymentLatency.incidents.length, 0);
+
+    const includePayment = await fetch(`${address}/api/alert-policies/latency-critical`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...latencyPolicy, scope: { type: "SELECTED_SERVICES", serviceIds: ["payment-service"] } }),
+    });
+    assert.equal(includePayment.status, 200);
+    app.advance();
+
+    const withPaymentLatency = await (await fetch(`${address}/api/incidents`)).json();
+    assert.equal(withPaymentLatency.incidents.length, 1);
+    assert.ok(withPaymentLatency.incidents[0].alerts.some((alert: { policyId: string; serviceId: string }) => alert.policyId === "latency-critical" && alert.serviceId === "payment-service"));
+  } finally {
+    await app.close();
+  }
+});
+
+test("detection status explains when active alerts are waiting for correlated evidence", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    const disableLatency = await fetch(`${address}/api/alert-policies/latency-critical`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "latency above 1,000 ms",
+        metric: "latencyMs",
+        comparator: "GREATER_THAN",
+        threshold: 1_000,
+        breachDurationSeconds: 0,
+        severity: "SEV-1",
+        enabled: false,
+        scope: { type: "ALL_SERVICES" },
+      }),
+    });
+    assert.equal(disableLatency.status, 200);
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const response = await fetch(`${address}/api/detection-status`);
+    const status = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(status.state, "WAITING_FOR_CORRELATED_EVIDENCE");
+    assert.equal(status.activeAlerts.length, 2);
+    assert.ok(status.activeAlerts.every((alert: { metric: string }) => alert.metric === "errorRate"));
+    assert.match(status.message, /waiting for.*correlated alert/i);
+  } finally {
+    await app.close();
+  }
+});
+
 test("incident room assets and bounded metric history are available to investigators", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();

@@ -30,6 +30,34 @@
         <div class="controls"><button class="button danger" id="trigger-deployment">Deploy payment-service v1.8.3</button><button class="button secondary" id="recover-system">Recover system</button></div>
       </section>
 
+      <section class="policy-panel" aria-labelledby="policy-title">
+        <div class="section-heading policy-heading"><div><p class="eyebrow">Detection configuration</p><h2 id="policy-title">Alert policies</h2><p>Rules evaluate live telemetry and create one alert per affected service.</p></div><button class="button secondary" id="new-policy" type="button">New policy</button></div>
+        <div class="policy-workbench">
+          <ol class="policy-list" id="alert-policy-list"><li class="empty">Loading alert policies…</li></ol>
+          <form class="policy-form" id="alert-policy-form" hidden>
+            <div class="policy-form-heading"><div><p class="eyebrow" id="policy-form-mode">New policy</p><h3 id="policy-form-title">Create alert policy</h3></div><button class="text-button" id="cancel-policy" type="button">Cancel</button></div>
+            <p class="form-error" id="policy-form-error" role="alert" hidden></p>
+            <label>Policy name<input id="policy-name" name="name" maxlength="100" required /></label>
+            <div class="form-grid">
+              <label>Watch<select id="policy-metric" name="metric"><option value="latencyMs">Latency</option><option value="errorRate">Error rate</option><option value="trafficRpm">Request volume</option><option value="cpuPercent">CPU utilization</option></select></label>
+              <label>Condition<select id="policy-comparator" name="comparator"><option value="GREATER_THAN">Above</option><option value="LESS_THAN">Below</option></select></label>
+              <label>Threshold<input id="policy-threshold" name="threshold" type="number" min="0" step="0.1" required /></label>
+              <label>Must persist (seconds)<input id="policy-duration" name="breachDurationSeconds" type="number" min="0" max="3600" step="1" required /></label>
+              <label>Severity<select id="policy-severity" name="severity"><option value="SEV-1">SEV-1 · Critical</option><option value="SEV-2">SEV-2 · High</option><option value="SEV-3">SEV-3 · Medium</option><option value="SEV-4">SEV-4 · Low</option></select></label>
+              <label class="enabled-field"><input id="policy-enabled" name="enabled" type="checkbox" checked /> Policy enabled</label>
+            </div>
+            <label>Scope<select id="policy-scope" name="scope"><option value="ALL_SERVICES">All monitored services</option><option value="SELECTED_SERVICES">Selected services</option></select></label>
+            <fieldset class="service-selector" id="policy-service-selector" hidden><legend>Selected services</legend><div id="policy-service-options"></div></fieldset>
+            <div class="form-actions"><button class="button" id="save-policy" type="submit">Save policy</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="detection-panel" id="detection-panel" hidden aria-live="polite" aria-labelledby="detection-title">
+        <div><p class="eyebrow">Detection status</p><h2 id="detection-title">Waiting for correlated evidence</h2><p id="detection-message"></p></div>
+        <ol id="detection-alerts"></ol>
+      </section>
+
       <section class="incident-panel" id="incident-panel" hidden aria-labelledby="incident-title">
         <div class="incident-heading"><div><p class="eyebrow">Active incident / automatic detection</p><h2 id="incident-title">Checkout payment failures</h2><p id="incident-subtitle">Correlated alerts created an incident.</p></div><div class="incident-actions"><div class="incident-tags"><strong id="incident-severity">SEV-1</strong><span id="incident-status">Detected</span></div><a class="incident-room-link" id="incident-room-link" href="/incident.html">Open Incident Room <span>→</span></a></div></div>
         <div class="incident-body"><div><p class="eyebrow">Why this was created</p><ul id="incident-alerts"></ul></div><div><p class="eyebrow">Incident timeline</p><ol id="incident-timeline"></ol></div></div>

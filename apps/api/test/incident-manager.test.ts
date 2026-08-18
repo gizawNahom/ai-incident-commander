@@ -68,6 +68,76 @@ test("one threshold breach alone does not create an incident", () => {
   assert.equal(manager.list().length, 0);
 });
 
+test("a selected-service policy waits for its configured breach duration before creating one alert instance", () => {
+  const manager = new IncidentManager({
+    policies: [{
+      id: "orders-latency",
+      name: "Orders worker latency",
+      metric: "latencyMs",
+      comparator: "GREATER_THAN",
+      threshold: 1_000,
+      unit: "ms",
+      breachDurationSeconds: 10,
+      severity: "SEV-2",
+      enabled: true,
+      scope: { type: "SELECTED_SERVICES", serviceIds: ["orders-worker"] },
+    }],
+  });
+  const alerts: IncidentEvent[] = [];
+  manager.subscribe((event) => alerts.push(event));
+  const system = (timestamp: string) => ({
+    type: "system" as const,
+    system: {
+      timestamp,
+      services: [
+        { id: "orders-worker", name: "Orders Worker", dependencies: [], metrics: { latencyMs: 1_400, errorRate: 0 } },
+        { id: "catalog-api", name: "Catalog API", dependencies: [], metrics: { latencyMs: 1_400, errorRate: 0 } },
+      ],
+    },
+  });
+
+  manager.observe(system("2026-08-13T12:00:00.000Z"));
+  manager.observe(system("2026-08-13T12:00:09.000Z"));
+  assert.equal(alerts.length, 0);
+
+  manager.observe(system("2026-08-13T12:00:10.000Z"));
+  const alert = alerts.find((event) => event.type === "alert-triggered");
+  assert.equal(alert?.type, "alert-triggered");
+  if (alert?.type !== "alert-triggered") throw new Error("Expected an alert");
+  assert.equal(alert.alert.serviceId, "orders-worker");
+  assert.equal(alert.alert.policyId, "orders-latency");
+  assert.equal(alert.alert.severity, "SEV-2");
+});
+
+test("a disabled policy never produces an alert", () => {
+  const manager = new IncidentManager({
+    policies: [{
+      id: "disabled-latency",
+      name: "Disabled latency policy",
+      metric: "latencyMs",
+      comparator: "GREATER_THAN",
+      threshold: 1_000,
+      unit: "ms",
+      breachDurationSeconds: 0,
+      severity: "SEV-1",
+      enabled: false,
+      scope: { type: "ALL_SERVICES" },
+    }],
+  });
+  const alerts: IncidentEvent[] = [];
+  manager.subscribe((event) => alerts.push(event));
+
+  manager.observe({
+    type: "system",
+    system: {
+      timestamp: "2026-08-13T12:00:00.000Z",
+      services: [{ id: "catalog-api", name: "Catalog API", dependencies: [], metrics: { latencyMs: 1_400, errorRate: 0 } }],
+    },
+  });
+
+  assert.equal(alerts.length, 0);
+});
+
 test("threshold breaches on unrelated dependency paths do not merge into one incident", () => {
   const manager = new IncidentManager();
   manager.observe({

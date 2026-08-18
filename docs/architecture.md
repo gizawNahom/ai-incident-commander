@@ -28,6 +28,18 @@ docs/adr/              concise architectural decisions
 
 `SuggestedAction` is a separate safety-governed entity: PROPOSED → APPROVED/REJECTED → EXECUTING → COMPLETED/FAILED. Only an approved action can invoke a simulator command. `Service`, `Deployment`, `Alert`, `MetricSample`, and `LogEntry` provide evidence; their events feed incident detection and the grounded investigator context.
 
+`AlertPolicy` is a reusable detector configuration: scope (all or selected
+services), metric, comparator, threshold, breach duration, severity, and
+enabled state. The in-memory policy store validates API input and supplies the
+incident manager; each policy can create a separate alert instance per matching
+service. This state is deliberately not durable until the later PostgreSQL
+slice.
+
+The incident manager also exposes a small detector-status read model: no active
+alerts, active alerts waiting for correlation, or an incident created. The
+dashboard reads this model alongside its SSE stream so it can explain why a
+single policy's alerts have not opened an incident.
+
 ## MVP slices
 
 1. **Walking skeleton (this change):** live API Gateway latency from deterministic simulator to dashboard via SSE.

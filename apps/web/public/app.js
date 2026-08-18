@@ -6,6 +6,9 @@ const elements = {
   affected: byId("affected-services"),
   checkoutErrors: byId("checkout-errors"),
   description: byId("scenario-description"),
+  detectionAlerts: byId("detection-alerts"),
+  detectionMessage: byId("detection-message"),
+  detectionPanel: byId("detection-panel"),
   eventCount: byId("event-count"),
   eventList: byId("event-list"),
   focus: byId("service-focus"),
@@ -20,6 +23,23 @@ const elements = {
   incidentTimeline: byId("incident-timeline"),
   incidentTitle: byId("incident-title"),
   paymentLatency: byId("payment-latency"),
+  policyComparator: byId("policy-comparator"),
+  policyDuration: byId("policy-duration"),
+  policyEnabled: byId("policy-enabled"),
+  policyError: byId("policy-form-error"),
+  policyForm: byId("alert-policy-form"),
+  policyFormMode: byId("policy-form-mode"),
+  policyFormTitle: byId("policy-form-title"),
+  policyList: byId("alert-policy-list"),
+  policyMetric: byId("policy-metric"),
+  policyName: byId("policy-name"),
+  policyScope: byId("policy-scope"),
+  policyServiceOptions: byId("policy-service-options"),
+  policyServiceSelector: byId("policy-service-selector"),
+  policySeverity: byId("policy-severity"),
+  policyThreshold: byId("policy-threshold"),
+  newPolicy: byId("new-policy"),
+  cancelPolicy: byId("cancel-policy"),
   recover: byId("recover-system"),
   redisLatency: byId("redis-latency"),
   scenario: byId("scenario-badge"),
@@ -32,6 +52,8 @@ const elements = {
 let system;
 let incident;
 let selectedServiceId = "payment-service";
+let policies = [];
+let editingPolicyId;
 const events = [];
 
 function getService(id) {
@@ -71,6 +93,7 @@ function renderSystem(nextSystem) {
 
   renderTopology();
   renderFocus();
+  if (!elements.policyForm.hidden) renderServiceOptions();
 }
 
 function renderTopology() {
@@ -134,7 +157,7 @@ function renderIncident(nextIncident) {
   elements.incidentRoomLink.href = `/incident.html?id=${encodeURIComponent(incident.id)}`;
   elements.incidentSeverity.textContent = incident.severity;
   elements.incidentStatus.textContent = incident.status;
-  elements.incidentSubtitle.textContent = `Created at ${new Date(incident.startedAt).toLocaleTimeString()} after correlated Payment and Checkout alerts.`;
+  elements.incidentSubtitle.textContent = `Created at ${new Date(incident.startedAt).toLocaleTimeString()} after correlated service alerts.`;
   elements.incidentAlerts.replaceChildren(...incident.alerts.map((alert) => {
     const item = document.createElement("li");
     item.textContent = `${alert.title}: ${formatNumber(alert.observedValue)}${alert.unit} observed`;
@@ -147,6 +170,28 @@ function renderIncident(nextIncident) {
   }));
 }
 
+function renderDetectionStatus(status) {
+  const waiting = status.state === "WAITING_FOR_CORRELATED_EVIDENCE" && !incident;
+  elements.detectionPanel.hidden = !waiting;
+  if (!waiting) return;
+  elements.detectionMessage.textContent = status.message;
+  elements.detectionAlerts.replaceChildren(...status.activeAlerts.map((alert) => {
+    const item = document.createElement("li");
+    item.textContent = `${alert.title} · ${formatNumber(alert.observedValue)}${alert.unit} observed · ${alert.severity}`;
+    return item;
+  }));
+}
+
+async function refreshDetectionStatus() {
+  try {
+    const response = await fetch("/api/detection-status");
+    if (!response.ok) throw new Error("Unable to load detection status");
+    renderDetectionStatus(await response.json());
+  } catch {
+    elements.detectionPanel.hidden = true;
+  }
+}
+
 function renderFocus() {
   const service = getService(selectedServiceId);
   if (!service) return;
@@ -157,7 +202,7 @@ function renderFocus() {
 function addEvent(event) {
   if (event.type === "telemetry" || event.type === "system") return;
   const normalized = event.type === "alert-triggered"
-    ? { type: "alert", timestamp: event.alert.triggeredAt, level: "warn", message: event.alert.title }
+    ? { type: "alert", timestamp: event.alert.triggeredAt, level: "warn", message: `${event.alert.title} · ${event.alert.severity}` }
     : event.type === "incident-created"
       ? { type: "incident", timestamp: event.incident.startedAt, level: "error", message: `${event.incident.id} created: ${event.incident.title}` }
       : event;
@@ -171,6 +216,144 @@ function addEvent(event) {
     row.innerHTML = `<time>${new Date(item.timestamp).toLocaleTimeString()}</time><span class="event-kind ${level}">${item.type}${level ? ` / ${level}` : ""}</span><span>${message}</span>`;
     return row;
   }));
+}
+
+function displayMetric(metric) {
+  return ({ latencyMs: "latency", errorRate: "error rate", trafficRpm: "request volume", cpuPercent: "CPU utilization" })[metric] ?? metric;
+}
+
+function displayScope(scope) {
+  if (scope.type === "ALL_SERVICES") return "All monitored services";
+  return scope.serviceIds.map((id) => getService(id)?.name ?? id).join(", ");
+}
+
+function renderPolicies(nextPolicies) {
+  policies = nextPolicies;
+  if (policies.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No alert policies are configured.";
+    elements.policyList.replaceChildren(empty);
+    return;
+  }
+  elements.policyList.replaceChildren(...policies.map((policy) => {
+    const row = document.createElement("li");
+    row.className = `policy-row${policy.enabled ? "" : " disabled"}`;
+    const details = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = policy.name;
+    const summary = document.createElement("p");
+    const direction = policy.comparator === "GREATER_THAN" ? "above" : "below";
+    const duration = policy.breachDurationSeconds === 0 ? "immediately" : `for ${policy.breachDurationSeconds}s`;
+    summary.textContent = `${displayMetric(policy.metric)} ${direction} ${formatNumber(policy.threshold)} ${policy.unit} · ${duration}`;
+    const scope = document.createElement("small");
+    scope.textContent = displayScope(policy.scope);
+    details.append(title, summary, scope);
+    const controls = document.createElement("div");
+    controls.className = "policy-row-controls";
+    const state = document.createElement("span");
+    state.className = `policy-state ${policy.enabled ? "enabled" : "disabled"}`;
+    state.textContent = policy.enabled ? policy.severity : "Disabled";
+    const edit = document.createElement("button");
+    edit.className = "text-button";
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => openPolicyForm(policy));
+    controls.append(state, edit);
+    row.append(details, controls);
+    return row;
+  }));
+}
+
+function renderServiceOptions(selectedIds = []) {
+  if (!system) return;
+  const selected = new Set(selectedIds.length ? selectedIds : [...elements.policyServiceOptions.querySelectorAll("input:checked")].map((input) => input.value));
+  elements.policyServiceOptions.replaceChildren(...system.services.map((service) => {
+    const label = document.createElement("label");
+    label.className = "service-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "serviceIds";
+    checkbox.value = service.id;
+    checkbox.checked = selected.has(service.id);
+    const text = document.createElement("span");
+    text.textContent = service.name;
+    label.append(checkbox, text);
+    return label;
+  }));
+}
+
+function syncScopeSelector() {
+  const selected = elements.policyScope.value === "SELECTED_SERVICES";
+  elements.policyServiceSelector.hidden = !selected;
+  if (selected) renderServiceOptions();
+}
+
+function openPolicyForm(policy) {
+  editingPolicyId = policy?.id;
+  elements.policyForm.hidden = false;
+  elements.policyError.hidden = true;
+  elements.policyError.textContent = "";
+  elements.policyFormMode.textContent = policy ? "Edit detection rule" : "New detection rule";
+  elements.policyFormTitle.textContent = policy ? "Edit alert policy" : "Create alert policy";
+  elements.policyName.value = policy?.name ?? "";
+  elements.policyMetric.value = policy?.metric ?? "latencyMs";
+  elements.policyComparator.value = policy?.comparator ?? "GREATER_THAN";
+  elements.policyThreshold.value = policy?.threshold ?? "";
+  elements.policyDuration.value = policy?.breachDurationSeconds ?? 0;
+  elements.policySeverity.value = policy?.severity ?? "SEV-2";
+  elements.policyEnabled.checked = policy?.enabled ?? true;
+  elements.policyScope.value = policy?.scope.type ?? "ALL_SERVICES";
+  renderServiceOptions(policy?.scope.type === "SELECTED_SERVICES" ? policy.scope.serviceIds : []);
+  syncScopeSelector();
+  elements.policyName.focus();
+}
+
+function closePolicyForm() {
+  editingPolicyId = undefined;
+  elements.policyForm.hidden = true;
+  elements.policyError.hidden = true;
+}
+
+function policyPayload() {
+  const selectedServiceIds = [...elements.policyServiceOptions.querySelectorAll("input:checked")].map((input) => input.value);
+  return {
+    name: elements.policyName.value,
+    metric: elements.policyMetric.value,
+    comparator: elements.policyComparator.value,
+    threshold: Number(elements.policyThreshold.value),
+    breachDurationSeconds: Number(elements.policyDuration.value),
+    severity: elements.policySeverity.value,
+    enabled: elements.policyEnabled.checked,
+    scope: elements.policyScope.value === "ALL_SERVICES"
+      ? { type: "ALL_SERVICES" }
+      : { type: "SELECTED_SERVICES", serviceIds: selectedServiceIds },
+  };
+}
+
+async function savePolicy(event) {
+  event.preventDefault();
+  const method = editingPolicyId ? "PUT" : "POST";
+  const path = editingPolicyId ? `/api/alert-policies/${encodeURIComponent(editingPolicyId)}` : "/api/alert-policies";
+  const save = byId("save-policy");
+  save.disabled = true;
+  elements.policyError.hidden = true;
+  try {
+    const response = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(policyPayload()) });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error ?? "Unable to save alert policy");
+    const index = policies.findIndex((policy) => policy.id === payload.policy.id);
+    const nextPolicies = index === -1 ? [...policies, payload.policy] : policies.map((policy) => policy.id === payload.policy.id ? payload.policy : policy);
+    renderPolicies(nextPolicies);
+    closePolicyForm();
+    addEvent({ type: "policy", timestamp: new Date().toISOString(), level: "", message: `${payload.policy.name} is now active in the detector` });
+    refreshDetectionStatus();
+  } catch (error) {
+    elements.policyError.textContent = error instanceof Error ? error.message : "Unable to save alert policy";
+    elements.policyError.hidden = false;
+  } finally {
+    save.disabled = false;
+  }
 }
 
 async function sendControl(path, button) {
@@ -187,18 +370,30 @@ async function sendControl(path, button) {
 
 elements.trigger.addEventListener("click", () => sendControl("/api/simulator/bad-payment-deployment", elements.trigger));
 elements.recover.addEventListener("click", () => sendControl("/api/simulator/recover", elements.recover));
+elements.newPolicy.addEventListener("click", () => openPolicyForm(undefined));
+elements.cancelPolicy.addEventListener("click", closePolicyForm);
+elements.policyScope.addEventListener("change", syncScopeSelector);
+elements.policyForm.addEventListener("submit", savePolicy);
 
 fetch("/api/system").then((response) => response.json()).then(renderSystem).catch(() => { elements.description.textContent = "Unable to load the simulator snapshot."; });
 fetch("/api/incidents").then((response) => response.json()).then((payload) => renderIncident(payload.incidents[0])).catch(() => renderIncident(undefined));
+refreshDetectionStatus();
+fetch("/api/alert-policies").then((response) => response.json()).then((payload) => renderPolicies(payload.policies)).catch(() => {
+  const error = document.createElement("li");
+  error.className = "empty";
+  error.textContent = "Unable to load alert policies.";
+  elements.policyList.replaceChildren(error);
+});
 const liveEvents = new EventSource("/api/events");
 liveEvents.addEventListener("open", () => { elements.stream.textContent = "Streaming"; });
-liveEvents.addEventListener("system", (event) => renderSystem(JSON.parse(event.data).system));
+liveEvents.addEventListener("system", (event) => { renderSystem(JSON.parse(event.data).system); refreshDetectionStatus(); });
 liveEvents.addEventListener("deployment", (event) => addEvent(JSON.parse(event.data)));
 liveEvents.addEventListener("log", (event) => addEvent(JSON.parse(event.data)));
-liveEvents.addEventListener("alert-triggered", (event) => addEvent(JSON.parse(event.data)));
+liveEvents.addEventListener("alert-triggered", (event) => { addEvent(JSON.parse(event.data)); refreshDetectionStatus(); });
 liveEvents.addEventListener("incident-created", (event) => {
   const change = JSON.parse(event.data);
   addEvent(change);
   renderIncident(change.incident);
+  refreshDetectionStatus();
 });
 liveEvents.addEventListener("error", () => { elements.stream.textContent = "Reconnecting"; });

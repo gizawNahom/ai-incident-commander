@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
 import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
+import { AlertPolicyNotFoundError, AlertPolicyStore, AlertPolicyValidationError } from "./alert-policy-store.ts";
 import { DeterministicInvestigator, type IncidentInvestigator, type Investigation } from "../../../packages/ai/src/deterministic-investigator.ts";
 import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
 
@@ -30,7 +31,8 @@ function log(event: string, fields: Record<string, string>): void {
 
 export function createServer(options: AppOptions = {}): RunningApp {
   const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date() });
-  const incidentManager = new IncidentManager();
+  const alertPolicies = new AlertPolicyStore(serviceIds);
+  const incidentManager = new IncidentManager({ policies: alertPolicies.list() });
   const deterministicInvestigator = new DeterministicInvestigator();
   const investigator = options.investigator ?? configuredInvestigator(deterministicInvestigator);
   const streams = new Set<ServerResponse>();
@@ -66,6 +68,47 @@ export function createServer(options: AppOptions = {}): RunningApp {
     }
     if (url.pathname === "/api/system") {
       json(response, 200, simulator.snapshot());
+      return;
+    }
+    if (url.pathname === "/api/detection-status") {
+      json(response, 200, incidentManager.detectionStatus());
+      return;
+    }
+    if (url.pathname === "/api/alert-policies") {
+      if (request.method === "GET") {
+        json(response, 200, { policies: alertPolicies.list() });
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      try {
+        const policy = alertPolicies.create(await readJson(request));
+        incidentManager.setPolicies(alertPolicies.list());
+        json(response, 201, { policy });
+      } catch (error) {
+        json(response, 400, { error: policyErrorMessage(error), requestId });
+      }
+      return;
+    }
+    if (url.pathname.startsWith("/api/alert-policies/")) {
+      if (request.method !== "PUT") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      const policyId = decodeURIComponent(url.pathname.slice("/api/alert-policies/".length));
+      try {
+        const policy = alertPolicies.update(policyId, await readJson(request));
+        incidentManager.setPolicies(alertPolicies.list());
+        json(response, 200, { policy });
+      } catch (error) {
+        if (error instanceof AlertPolicyNotFoundError) {
+          json(response, 404, { error: error.message, requestId });
+          return;
+        }
+        json(response, 400, { error: policyErrorMessage(error), requestId });
+      }
       return;
     }
     if (url.pathname === "/api/incidents") {
@@ -192,6 +235,24 @@ function broadcast(streams: ReadonlySet<ServerResponse>, event: SimulatorEvent |
 
 function isServiceId(value: string | null): value is ServiceId {
   return value !== null && serviceIds.includes(value as ServiceId);
+}
+
+async function readJson(request: AsyncIterable<unknown>): Promise<unknown> {
+  let body = "";
+  for await (const chunk of request) {
+    body += String(chunk);
+    if (body.length > 16_384) throw new AlertPolicyValidationError("Request body is too large");
+  }
+  if (body.length === 0) throw new AlertPolicyValidationError("A JSON request body is required");
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new AlertPolicyValidationError("Request body must be valid JSON");
+  }
+}
+
+function policyErrorMessage(error: unknown): string {
+  return error instanceof AlertPolicyValidationError ? error.message : "Unable to update alert policy";
 }
 
 if (process.argv[1]?.endsWith("server.ts")) {

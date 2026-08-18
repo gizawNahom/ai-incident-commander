@@ -1,18 +1,21 @@
-export type MetricName = "latencyMs" | "errorRate";
-export type MetricUnit = "ms" | "%";
+import {
+  defaultAlertPolicies,
+  policyAppliesToService,
+  policyIsBreached,
+  type AlertMetricName,
+  type AlertPolicy,
+} from "../../../packages/domain/src/alert-policy.ts";
 
-export type MonitoringPolicy = {
-  readonly id: string;
-  readonly metric: MetricName;
-  readonly threshold: number;
-  readonly unit: MetricUnit;
-  readonly label: string;
-};
+export type MetricName = AlertMetricName;
+export type MetricUnit = AlertPolicy["unit"];
+export type MonitoringPolicy = AlertPolicy;
 
 export type Alert = {
   readonly id: string;
   readonly policyId: string;
   readonly serviceId: string;
+  readonly metric: MetricName;
+  readonly severity: AlertPolicy["severity"];
   readonly title: string;
   readonly threshold: number;
   readonly observedValue: number;
@@ -43,6 +46,12 @@ export type IncidentEvent =
   | { readonly type: "incident-created"; readonly incident: DetectedIncident }
   | { readonly type: "incident-updated"; readonly incident: DetectedIncident };
 
+export type DetectionStatus = {
+  readonly state: "NO_ACTIVE_ALERTS" | "WAITING_FOR_CORRELATED_EVIDENCE" | "INCIDENT_CREATED";
+  readonly message: string;
+  readonly activeAlerts: readonly Alert[];
+};
+
 type ObservedService = {
   readonly id: string;
   readonly name: string;
@@ -58,11 +67,6 @@ type OperationalEvent =
   | { readonly type: "telemetry" };
 type Subscriber = (event: IncidentEvent) => void;
 
-const defaultPolicies: readonly MonitoringPolicy[] = [
-  { id: "latency-critical", metric: "latencyMs", threshold: 1_000, unit: "ms", label: "latency above 1,000 ms" },
-  { id: "error-rate-critical", metric: "errorRate", threshold: 10, unit: "%", label: "error rate above 10%" },
-];
-
 type IncidentManagerOptions = {
   readonly policies?: readonly MonitoringPolicy[];
   readonly correlationWindowMs?: number;
@@ -74,13 +78,15 @@ export class IncidentManager {
   private readonly alerts: Alert[] = [];
   private readonly evidence: IncidentTimelineEvent[] = [];
   private readonly activeAlertKeys = new Set<string>();
-  private readonly policies: readonly MonitoringPolicy[];
+  private readonly activeAlerts = new Map<string, Alert>();
+  private readonly breachStartedAt = new Map<string, string>();
+  private policies: readonly MonitoringPolicy[];
   private readonly correlationWindowMs: number;
   private nextIncidentNumber: number;
   private incident: DetectedIncident | undefined;
 
   constructor(options: IncidentManagerOptions = {}) {
-    this.policies = options.policies ?? defaultPolicies;
+    this.policies = options.policies ?? defaultAlertPolicies;
     this.correlationWindowMs = options.correlationWindowMs ?? 60_000;
     this.nextIncidentNumber = options.firstIncidentNumber ?? 1042;
   }
@@ -96,6 +102,36 @@ export class IncidentManager {
 
   find(id: string): DetectedIncident | undefined {
     return this.incident?.id === id ? this.incident : undefined;
+  }
+
+  setPolicies(policies: readonly MonitoringPolicy[]): void {
+    this.policies = policies;
+    this.activeAlertKeys.clear();
+    this.activeAlerts.clear();
+    this.breachStartedAt.clear();
+  }
+
+  detectionStatus(): DetectionStatus {
+    const activeAlerts = [...this.activeAlerts.values()];
+    if (this.incident) {
+      return {
+        state: "INCIDENT_CREATED",
+        message: "Correlated alerts created an incident.",
+        activeAlerts,
+      };
+    }
+    if (activeAlerts.length === 0) {
+      return {
+        state: "NO_ACTIVE_ALERTS",
+        message: "No active alert conditions are waiting for correlation.",
+        activeAlerts,
+      };
+    }
+    return {
+      state: "WAITING_FOR_CORRELATED_EVIDENCE",
+      message: "Active alerts are waiting for a correlated alert from a distinct detection policy on a connected service.",
+      activeAlerts,
+    };
   }
 
   recordInvestigation(input: { readonly incidentId: string; readonly timestamp: string; readonly hypothesis: string; readonly suggestedAction?: string }): void {
@@ -124,11 +160,25 @@ export class IncidentManager {
     for (const service of event.system.services) {
       for (const policy of this.policies) {
         const observedValue = service.metrics[policy.metric];
-        if (observedValue > policy.threshold) this.triggerAlert(service, policy, observedValue, event.system.timestamp);
+        this.evaluatePolicy(service, policy, observedValue, event.system.timestamp);
       }
     }
     const pair = this.findCorrelatedPair(event.system);
     if (pair) this.createIncident(event.system, pair);
+  }
+
+  private evaluatePolicy(service: ObservedService, policy: MonitoringPolicy, observedValue: number, timestamp: string): void {
+    const key = `${policy.id}:${service.id}`;
+    if (!policy.enabled || !policyAppliesToService(policy, service.id) || !policyIsBreached(policy, observedValue)) {
+      this.breachStartedAt.delete(key);
+      this.activeAlertKeys.delete(key);
+      this.activeAlerts.delete(key);
+      return;
+    }
+    const breachStartedAt = this.breachStartedAt.get(key) ?? timestamp;
+    this.breachStartedAt.set(key, breachStartedAt);
+    const breachDurationMs = policy.breachDurationSeconds * 1_000;
+    if (elapsedMs(timestamp, breachStartedAt) >= breachDurationMs) this.triggerAlert(service, policy, observedValue, timestamp);
   }
 
   private triggerAlert(service: ObservedService, policy: MonitoringPolicy, observedValue: number, timestamp: string): void {
@@ -139,13 +189,16 @@ export class IncidentManager {
       id: `ALR-${this.alerts.length + 1}`,
       policyId: policy.id,
       serviceId: service.id,
-      title: `${service.name} ${policy.label}`,
+      metric: policy.metric,
+      severity: policy.severity,
+      title: `${service.name} ${policy.name}`,
       threshold: policy.threshold,
       observedValue,
       unit: policy.unit,
       triggeredAt: timestamp,
     };
     this.alerts.push(alert);
+    this.activeAlerts.set(key, alert);
     this.recordEvidence({ type: "ALERT_TRIGGERED", timestamp, serviceId: service.id, message: `${alert.title} (observed ${alert.observedValue}${alert.unit})` });
     this.publish({ type: "alert-triggered", alert });
   }
@@ -167,7 +220,7 @@ export class IncidentManager {
     this.nextIncidentNumber += 1;
     const alertServices = [...new Set(pair.map((alert) => alert.serviceId))].sort();
     const serviceById = new Map(system.services.map((service) => [service.id, service]));
-    const impactAlert = pair.find((alert) => alert.policyId === "error-rate-critical") ?? pair[0];
+    const impactAlert = pair.find((alert) => alert.metric === "errorRate") ?? pair[0];
     const title = `${serviceById.get(impactAlert.serviceId)?.name ?? impactAlert.serviceId} degradation`;
     const creation: IncidentTimelineEvent = {
       type: "INCIDENT_CREATED",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createServer } from "../src/server.ts";
-import type { IncidentInvestigator } from "../../../packages/ai/src/deterministic-investigator.ts";
+import { DeterministicInvestigator, type IncidentInvestigator, type InvestigationContext } from "../../../packages/ai/src/deterministic-investigator.ts";
 
 test("health endpoint returns an operational snapshot with a request id", async () => {
   const app = createServer({ autoStart: false });
@@ -199,6 +199,69 @@ test("incident room assets and bounded metric history are available to investiga
     assert.equal(payload.serviceId, "payment-service");
     assert.equal(payload.samples.length, 4);
     assert.ok(payload.samples.at(-1).latencyMs > 1_000);
+  } finally {
+    await app.close();
+  }
+});
+
+test("incident evidence API preserves the failure record independently from recovered live telemetry", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+    await fetch(`${address}/api/simulator/recover`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const evidenceResponse = await fetch(`${address}/api/incidents/INC-1042/evidence`);
+    const evidence = await evidenceResponse.json();
+    const liveSystem = await (await fetch(`${address}/api/system`)).json();
+    const paymentEvidence = evidence.metricHistories.find((history: { serviceId: string }) => history.serviceId === "payment-service");
+    const livePayment = liveSystem.services.find((service: { id: string }) => service.id === "payment-service");
+
+    assert.equal(evidenceResponse.status, 200);
+    assert.ok(paymentEvidence.samples.some((sample: { latencyMs: number }) => sample.latencyMs > 1_000));
+    assert.equal(livePayment.health, "healthy");
+    assert.ok(livePayment.metrics.latencyMs < 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("the investigator receives the preserved incident context instead of every live simulator service", async () => {
+  let receivedContext: InvestigationContext | undefined;
+  const deterministic = new DeterministicInvestigator();
+  const investigator: IncidentInvestigator = {
+    investigate(context) {
+      receivedContext = context;
+      return deterministic.investigate(context);
+    },
+  };
+  const app = createServer({ autoStart: false, investigator });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+    await fetch(`${address}/api/simulator/recover`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const response = await fetch(`${address}/api/incidents/INC-1042/investigate`, { method: "POST" });
+    assert.equal(response.status, 200);
+    assert.ok(receivedContext?.services.some((service) => service.id === "redis"));
+    assert.equal(receivedContext?.services.some((service) => service.id === "notification-service"), false);
+    assert.ok(receivedContext?.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs > 1_000)));
   } finally {
     await app.close();
   }

@@ -30,6 +30,42 @@ test("the configured demo topology still creates an evidence-backed incident", (
   assert.equal(changes.filter((event) => event.type === "incident-created").length, 1);
 });
 
+test("an incident record retains relevant baseline, failure, and log evidence after the simulator recovers", () => {
+  let time = Date.parse("2026-08-13T12:00:00.000Z");
+  const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date(time) });
+  const manager = new IncidentManager();
+  manager.observe({ type: "system", system: simulator.snapshot() });
+  simulator.subscribe((event) => manager.observe(event));
+
+  simulator.triggerBadPaymentDeployment();
+  time += 2_000;
+  simulator.advance();
+  time += 2_000;
+  simulator.advance();
+  time += 2_000;
+  simulator.advance();
+
+  const beforeRecovery = manager.evidenceFor("INC-1042");
+  assert.ok(beforeRecovery);
+  assert.ok(beforeRecovery.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs > 1_000)));
+  assert.ok(beforeRecovery.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs < 200)));
+  assert.ok(beforeRecovery.logs.some((entry) => entry.serviceId === "payment-service" && /connection pool timeout/.test(entry.message)));
+  assert.ok(beforeRecovery.contextServiceIds.includes("redis"));
+  assert.equal(beforeRecovery.contextServiceIds.includes("notification-service"), false);
+
+  simulator.recover();
+  for (let tick = 0; tick < 4; tick += 1) {
+    time += 2_000;
+    simulator.advance();
+  }
+
+  const reportAfterRecovery = manager.evidenceFor("INC-1042");
+  const livePayment = simulator.snapshot().services.find((service) => service.id === "payment-service");
+  assert.ok(reportAfterRecovery?.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs > 1_000)));
+  assert.equal(livePayment?.health, "healthy");
+  assert.ok((livePayment?.metrics.latencyMs ?? 0) < 200);
+});
+
 test("any connected services with distinct threshold breaches create an incident without service-name rules", () => {
   const manager = new IncidentManager();
   manager.observe({ type: "deployment", timestamp: "2026-08-13T12:00:00.000Z", serviceId: "orders-worker", message: "orders-worker v9 deployed" });
@@ -166,6 +202,7 @@ test("records deterministic investigation activity in the incident timeline", ()
   simulator.advance();
   simulator.advance();
   simulator.advance();
+  const updatesBeforeInvestigation = changes.filter((event) => event.type === "incident-updated").length;
 
   manager.recordInvestigation({
     incidentId: "INC-1042",
@@ -178,5 +215,5 @@ test("records deterministic investigation activity in the incident timeline", ()
   assert.ok(timeline.some((event) => event.type === "AI_ANALYSIS_STARTED"));
   assert.ok(timeline.some((event) => event.type === "AI_HYPOTHESIS_GENERATED" && /likely initiating event/.test(event.message)));
   assert.ok(timeline.some((event) => event.type === "ACTION_SUGGESTED" && /Rollback/.test(event.message)));
-  assert.equal(changes.filter((event) => event.type === "incident-updated").length, 1);
+  assert.equal(changes.filter((event) => event.type === "incident-updated").length, updatesBeforeInvestigation + 1);
 });

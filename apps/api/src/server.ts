@@ -41,6 +41,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
     incidentManager.observe(event);
   });
   const unsubscribeIncidents = incidentManager.subscribe((event: IncidentEvent) => broadcast(streams, event));
+  incidentManager.observe({ type: "system", system: simulator.snapshot() });
   let interval: NodeJS.Timeout | undefined;
 
   const httpServer: Server = createHttpServer(async (request, response) => {
@@ -126,11 +127,15 @@ export function createServer(options: AppOptions = {}): RunningApp {
         json(response, 404, { error: "Incident not found", requestId });
         return;
       }
-      const system = simulator.snapshot();
+      const evidence = incidentManager.evidenceFor(incidentId);
+      if (!evidence) {
+        json(response, 409, { error: "Incident evidence is not available", requestId });
+        return;
+      }
       const context = {
-        incident,
-        services: system.services,
-        metricHistories: system.services.map((service) => simulator.history(service.id)),
+        incident: { ...incident, timeline: incident.timeline.filter(isInvestigationTimelineEvent) },
+        services: evidence.topology,
+        metricHistories: evidence.metricHistories,
       };
       let analysis: Investigation;
       try {
@@ -141,11 +146,21 @@ export function createServer(options: AppOptions = {}): RunningApp {
       }
       incidentManager.recordInvestigation({
         incidentId,
-        timestamp: system.timestamp,
+        timestamp: simulator.snapshot().timestamp,
         hypothesis: analysis.hypotheses[0]?.inference ?? "No hypothesis could be generated from the available evidence.",
         suggestedAction: analysis.suggestedAction ? `Rollback ${analysis.suggestedAction.targetServiceId} proposed` : undefined,
       });
       json(response, 200, analysis);
+      return;
+    }
+    if (url.pathname.startsWith("/api/incidents/") && url.pathname.endsWith("/evidence")) {
+      const incidentId = url.pathname.slice("/api/incidents/".length, -"/evidence".length);
+      const evidence = incidentManager.evidenceFor(incidentId);
+      if (!evidence) {
+        json(response, 404, { error: "Incident evidence not found", requestId });
+        return;
+      }
+      json(response, 200, evidence);
       return;
     }
     if (url.pathname.startsWith("/api/incidents/")) {
@@ -253,6 +268,10 @@ async function readJson(request: AsyncIterable<unknown>): Promise<unknown> {
 
 function policyErrorMessage(error: unknown): string {
   return error instanceof AlertPolicyValidationError ? error.message : "Unable to update alert policy";
+}
+
+function isInvestigationTimelineEvent(event: { readonly type: string }): event is { readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED"; readonly timestamp: string; readonly message: string; readonly serviceId?: string } {
+  return event.type === "DEPLOYMENT" || event.type === "LOG" || event.type === "ALERT_TRIGGERED" || event.type === "INCIDENT_CREATED";
 }
 
 if (process.argv[1]?.endsWith("server.ts")) {

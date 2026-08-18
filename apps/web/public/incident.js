@@ -27,11 +27,12 @@ const elements = {
   investigateButton: document.getElementById("investigate-button"),
   investigator: document.getElementById("room-investigator"),
   investigationResult: document.getElementById("investigation-result"),
+  liveState: document.getElementById("room-live-state"),
 };
 
 let incident;
 let system;
-const logs = [];
+let evidence;
 
 function format(value) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
@@ -50,7 +51,8 @@ function showError(message) {
 
 function renderIncident(nextIncident) {
   incident = nextIncident;
-  elements.header.innerHTML = `<p class="eyebrow">Incident room / live investigation</p><h1>${incident.id} — ${incident.title}</h1><p>Created from correlated service alerts. Evidence remains connected to the live simulator.</p>`;
+  elements.header.innerHTML = `<p class="eyebrow">Incident room / live investigation</p><h1>${incident.id} — ${incident.title}</h1><p>Preserved incident evidence is separate from the current system state.</p><p id="room-live-state">Connecting to live system state…</p>`;
+  elements.liveState = document.getElementById("room-live-state");
   elements.severity.textContent = incident.severity;
   elements.status.textContent = incident.status;
   elements.services.textContent = incident.affectedServices.length;
@@ -110,8 +112,15 @@ function renderTimeline() {
   }));
 }
 
-function renderLogs() {
-  elements.logs.replaceChildren(...logs.slice(0, 8).map((entry) => {
+function renderLogs(logs) {
+  if (logs.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No captured incident logs yet.";
+    elements.logs.replaceChildren(empty);
+    return;
+  }
+  elements.logs.replaceChildren(...logs.slice().reverse().slice(0, 8).map((entry) => {
     const item = document.createElement("li");
     item.innerHTML = `<time>${new Date(entry.timestamp).toLocaleTimeString()}</time><span class="${entry.level}">${entry.level.toUpperCase()}</span><p>${entry.message}</p>`;
     return item;
@@ -130,7 +139,10 @@ function renderMetricChart(target, samples, metric) {
 }
 
 function renderMetrics(histories) {
-  const [payment, checkout, redis] = histories;
+  const payment = histories.find((history) => history.serviceId === "payment-service");
+  const checkout = histories.find((history) => history.serviceId === "checkout-service");
+  const redis = histories.find((history) => history.serviceId === "redis");
+  if (!payment || !checkout || !redis) return;
   const currentPayment = payment.samples.at(-1);
   const currentCheckout = checkout.samples.at(-1);
   const currentRedis = redis.samples.at(-1);
@@ -142,8 +154,8 @@ function renderMetrics(histories) {
   renderMetricChart(elements.redisChart, redis.samples, "latencyMs");
 }
 
-function renderTopology() {
-  const graph = buildTopologyGraph(system.services);
+function renderTopology(topology) {
+  const graph = buildTopologyGraph(topology);
   const affected = new Set(incident.affectedServices);
   const canvas = document.createElement("div");
   canvas.className = "room-topology-canvas";
@@ -174,9 +186,24 @@ function renderTopology() {
   elements.topology.replaceChildren(canvas);
 }
 
-async function refreshMetrics() {
-  const histories = await Promise.all(["payment-service", "checkout-service", "redis"].map((service) => getJson(`/api/telemetry/history?service=${service}`)));
-  renderMetrics(histories);
+function renderLiveState(nextSystem) {
+  system = nextSystem;
+  const unhealthy = system.services.filter((service) => service.health !== "healthy").length;
+  elements.liveState.textContent = unhealthy === 0
+    ? `Live system now: healthy · ${system.scenario.replaceAll("-", " ")}`
+    : `Live system now: ${unhealthy} component${unhealthy === 1 ? "" : "s"} degraded · ${system.scenario.replaceAll("-", " ")}`;
+}
+
+function renderEvidence(nextEvidence) {
+  evidence = nextEvidence;
+  renderMetrics(evidence.metricHistories);
+  renderLogs(evidence.logs);
+  renderTopology(evidence.topology);
+}
+
+async function refreshEvidence() {
+  if (!incidentId) return;
+  renderEvidence(await getJson(`/api/incidents/${encodeURIComponent(incidentId)}/evidence`));
 }
 
 async function loadRoom() {
@@ -185,11 +212,10 @@ async function loadRoom() {
     return;
   }
   try {
-    const [nextIncident, nextSystem] = await Promise.all([getJson(`/api/incidents/${encodeURIComponent(incidentId)}`), getJson("/api/system")]);
+    const [nextIncident, nextEvidence, nextSystem] = await Promise.all([getJson(`/api/incidents/${encodeURIComponent(incidentId)}`), getJson(`/api/incidents/${encodeURIComponent(incidentId)}/evidence`), getJson("/api/system")]);
     renderIncident(nextIncident);
-    system = nextSystem;
-    renderTopology();
-    await refreshMetrics();
+    renderEvidence(nextEvidence);
+    renderLiveState(nextSystem);
   } catch (error) {
     showError(error instanceof Error ? error.message : "Unable to load Incident Room.");
   }
@@ -198,21 +224,16 @@ async function loadRoom() {
 const liveEvents = new EventSource("/api/events");
 liveEvents.addEventListener("system", async (event) => {
   if (!incident) return;
-  system = JSON.parse(event.data).system;
-  renderTopology();
-  try { await refreshMetrics(); } catch { showError("Live metric refresh failed."); }
-});
-liveEvents.addEventListener("log", (event) => {
-  if (!incident) return;
-  const entry = JSON.parse(event.data);
-  if (!incident.affectedServices.includes(entry.serviceId)) return;
-  logs.unshift(entry);
-  renderLogs();
+  renderLiveState(JSON.parse(event.data).system);
+  try { await refreshEvidence(); } catch { showError("Incident evidence refresh failed."); }
 });
 
 liveEvents.addEventListener("incident-updated", (event) => {
   const update = JSON.parse(event.data);
-  if (update.incident?.id === incidentId) renderIncident(update.incident);
+  if (update.incident?.id === incidentId) {
+    renderIncident(update.incident);
+    refreshEvidence().catch(() => showError("Incident evidence refresh failed."));
+  }
 });
 
 elements.investigateButton.addEventListener("click", async () => {

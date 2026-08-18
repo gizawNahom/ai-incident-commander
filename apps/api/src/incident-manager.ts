@@ -41,6 +41,20 @@ export type DetectedIncident = {
   readonly timeline: readonly IncidentTimelineEvent[];
 };
 
+export type IncidentMetricSample = Readonly<Record<MetricName, number>> & { readonly timestamp: string };
+export type IncidentMetricHistory = { readonly serviceId: string; readonly samples: readonly IncidentMetricSample[] };
+export type CapturedLog = { readonly timestamp: string; readonly serviceId: string; readonly level: "warn" | "error" | "info"; readonly message: string };
+export type CapturedDeployment = { readonly timestamp: string; readonly serviceId: string; readonly message: string };
+export type IncidentEvidence = {
+  readonly capturedAt: string;
+  readonly contextServiceIds: readonly string[];
+  readonly topology: readonly ObservedService[];
+  readonly metricHistories: readonly IncidentMetricHistory[];
+  readonly logs: readonly CapturedLog[];
+  readonly deployments: readonly CapturedDeployment[];
+  readonly alerts: readonly Alert[];
+};
+
 export type IncidentEvent =
   | { readonly type: "alert-triggered"; readonly alert: Alert }
   | { readonly type: "incident-created"; readonly incident: DetectedIncident }
@@ -62,10 +76,17 @@ type ObservedService = {
 type ObservedSystem = { readonly timestamp: string; readonly services: readonly ObservedService[] };
 type OperationalEvent =
   | { readonly type: "deployment"; readonly timestamp: string; readonly serviceId: string; readonly message: string }
-  | { readonly type: "log"; readonly timestamp: string; readonly serviceId: string; readonly message: string }
+  | { readonly type: "log"; readonly timestamp: string; readonly serviceId: string; readonly level?: "warn" | "error" | "info"; readonly message: string }
   | { readonly type: "system"; readonly system: ObservedSystem }
   | { readonly type: "telemetry" };
 type Subscriber = (event: IncidentEvent) => void;
+
+const MAX_PRE_INCIDENT_SAMPLES = 30;
+const MAX_INCIDENT_SAMPLES = 240;
+const PRESERVED_OPENING_SAMPLES = 60;
+const MAX_CAPTURED_LOGS = 250;
+const PRESERVED_OPENING_LOGS = 100;
+const MAX_CONTEXT_SERVICES = 12;
 
 type IncidentManagerOptions = {
   readonly policies?: readonly MonitoringPolicy[];
@@ -76,7 +97,9 @@ type IncidentManagerOptions = {
 export class IncidentManager {
   private readonly subscribers = new Set<Subscriber>();
   private readonly alerts: Alert[] = [];
-  private readonly evidence: IncidentTimelineEvent[] = [];
+  private readonly timelineEvidence: IncidentTimelineEvent[] = [];
+  private readonly recentMetricHistory = new Map<string, IncidentMetricSample[]>();
+  private readonly recentLogs: CapturedLog[] = [];
   private readonly activeAlertKeys = new Set<string>();
   private readonly activeAlerts = new Map<string, Alert>();
   private readonly breachStartedAt = new Map<string, string>();
@@ -84,6 +107,7 @@ export class IncidentManager {
   private readonly correlationWindowMs: number;
   private nextIncidentNumber: number;
   private incident: DetectedIncident | undefined;
+  private incidentEvidence: IncidentEvidence | undefined;
 
   constructor(options: IncidentManagerOptions = {}) {
     this.policies = options.policies ?? defaultAlertPolicies;
@@ -102,6 +126,10 @@ export class IncidentManager {
 
   find(id: string): DetectedIncident | undefined {
     return this.incident?.id === id ? this.incident : undefined;
+  }
+
+  evidenceFor(id: string): IncidentEvidence | undefined {
+    return this.incident?.id === id ? this.incidentEvidence : undefined;
   }
 
   setPolicies(policies: readonly MonitoringPolicy[]): void {
@@ -148,14 +176,26 @@ export class IncidentManager {
 
   observe(event: OperationalEvent): void {
     if (event.type === "deployment") {
-      this.recordEvidence({ type: "DEPLOYMENT", timestamp: event.timestamp, serviceId: event.serviceId, message: event.message });
+      const timelineEvent = { type: "DEPLOYMENT" as const, timestamp: event.timestamp, serviceId: event.serviceId, message: event.message };
+      this.recordEvidence(timelineEvent);
+      this.captureDeployment(timelineEvent);
       return;
     }
     if (event.type === "log") {
-      this.recordEvidence({ type: "LOG", timestamp: event.timestamp, serviceId: event.serviceId, message: event.message });
+      const timelineEvent = { type: "LOG" as const, timestamp: event.timestamp, serviceId: event.serviceId, message: event.message };
+      this.recordEvidence(timelineEvent);
+      const log: CapturedLog = { timestamp: event.timestamp, serviceId: event.serviceId, level: event.level ?? "info", message: event.message };
+      pushBounded(this.recentLogs, log, MAX_CAPTURED_LOGS, PRESERVED_OPENING_LOGS);
+      this.captureLog(timelineEvent, log);
       return;
     }
-    if (event.type !== "system" || this.incident) return;
+    if (event.type !== "system") return;
+
+    this.recordRecentMetrics(event.system);
+    if (this.incident) {
+      this.captureMetrics(event.system);
+      return;
+    }
 
     for (const service of event.system.services) {
       for (const policy of this.policies) {
@@ -237,14 +277,74 @@ export class IncidentManager {
       startedAt: system.timestamp,
       affectedServices: alertServices,
       alerts: [...pair],
-      timeline: this.evidence.filter((event) => !event.serviceId || [...incidentServices].some((serviceId) => areConnected(system.services, event.serviceId ?? "", serviceId))),
+      timeline: this.timelineEvidence.filter((event) => !event.serviceId || [...incidentServices].some((serviceId) => areConnected(system.services, event.serviceId ?? "", serviceId))),
     };
+    this.incidentEvidence = this.createEvidence(system, pair, incidentServices);
     this.publish({ type: "incident-created", incident: this.incident });
   }
 
   private recordEvidence(event: IncidentTimelineEvent): void {
-    this.evidence.push(event);
-    if (this.evidence.length > 30) this.evidence.shift();
+    this.timelineEvidence.push(event);
+    if (this.timelineEvidence.length > 30) this.timelineEvidence.shift();
+  }
+
+  private recordRecentMetrics(system: ObservedSystem): void {
+    for (const service of system.services) {
+      const samples = this.recentMetricHistory.get(service.id) ?? [];
+      pushBounded(samples, { timestamp: system.timestamp, ...service.metrics }, MAX_PRE_INCIDENT_SAMPLES, 0);
+      this.recentMetricHistory.set(service.id, samples);
+    }
+  }
+
+  private createEvidence(system: ObservedSystem, alerts: readonly Alert[], incidentServices: ReadonlySet<string>): IncidentEvidence {
+    const topology = contextTopology(system.services, incidentServices);
+    const contextServiceIds = topology.map((service) => service.id);
+    return {
+      capturedAt: system.timestamp,
+      contextServiceIds,
+      topology,
+      metricHistories: topology.map((service) => ({ serviceId: service.id, samples: [...(this.recentMetricHistory.get(service.id) ?? [])] })),
+      logs: this.recentLogs.filter((log) => contextServiceIds.includes(log.serviceId)),
+      deployments: this.timelineEvidence
+        .filter((event) => event.type === "DEPLOYMENT" && event.serviceId && contextServiceIds.includes(event.serviceId))
+        .map((event) => ({ timestamp: event.timestamp, serviceId: event.serviceId ?? "", message: event.message })),
+      alerts: [...alerts],
+    };
+  }
+
+  private captureMetrics(system: ObservedSystem): void {
+    if (!this.incidentEvidence) return;
+    const histories = new Map(this.incidentEvidence.metricHistories.map((history) => [history.serviceId, [...history.samples]]));
+    for (const service of system.services) {
+      const samples = histories.get(service.id);
+      if (!samples) continue;
+      pushBounded(samples, { timestamp: system.timestamp, ...service.metrics }, MAX_INCIDENT_SAMPLES, PRESERVED_OPENING_SAMPLES);
+      histories.set(service.id, samples);
+    }
+    this.incidentEvidence = { ...this.incidentEvidence, metricHistories: [...histories].map(([serviceId, samples]) => ({ serviceId, samples })) };
+  }
+
+  private captureLog(timelineEvent: IncidentTimelineEvent, log: CapturedLog): void {
+    if (!this.incidentEvidence || !this.incidentEvidence.contextServiceIds.includes(log.serviceId)) return;
+    const logs = [...this.incidentEvidence.logs];
+    pushBounded(logs, log, MAX_CAPTURED_LOGS, PRESERVED_OPENING_LOGS);
+    this.incidentEvidence = { ...this.incidentEvidence, logs };
+    this.appendIncidentTimeline(timelineEvent);
+  }
+
+  private captureDeployment(timelineEvent: IncidentTimelineEvent): void {
+    if (!this.incidentEvidence || !timelineEvent.serviceId || !this.incidentEvidence.contextServiceIds.includes(timelineEvent.serviceId)) return;
+    this.incidentEvidence = {
+      ...this.incidentEvidence,
+      deployments: [...this.incidentEvidence.deployments, { timestamp: timelineEvent.timestamp, serviceId: timelineEvent.serviceId, message: timelineEvent.message }],
+    };
+    this.appendIncidentTimeline(timelineEvent);
+  }
+
+  private appendIncidentTimeline(event: IncidentTimelineEvent): void {
+    if (!this.incident) return;
+    this.incident = { ...this.incident, timeline: [...this.incident.timeline, event] };
+    this.publish({ type: "incident-updated", incident: this.incident });
   }
 
   private publish(event: IncidentEvent): void {
@@ -280,4 +380,22 @@ function areConnected(services: readonly ObservedService[], from: string, to: st
     }
   }
   return false;
+}
+
+function contextTopology(services: readonly ObservedService[], incidentServices: ReadonlySet<string>): readonly ObservedService[] {
+  const contextIds = new Set(incidentServices);
+  for (const service of services) {
+    if (incidentServices.has(service.id) || service.dependencies.some((dependency) => incidentServices.has(dependency))) {
+      contextIds.add(service.id);
+      for (const dependency of service.dependencies) contextIds.add(dependency);
+    }
+  }
+  const roots = services.filter((service) => incidentServices.has(service.id));
+  const neighbors = services.filter((service) => !incidentServices.has(service.id) && contextIds.has(service.id));
+  return [...roots, ...neighbors].slice(0, MAX_CONTEXT_SERVICES);
+}
+
+function pushBounded<T>(items: T[], item: T, maximum: number, preservedOpeningItems: number): void {
+  if (items.length >= maximum) items.splice(Math.min(preservedOpeningItems, items.length - 1), 1);
+  items.push(item);
 }

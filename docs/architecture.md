@@ -40,6 +40,13 @@ alerts, active alerts waiting for correlation, or an incident created. The
 dashboard reads this model alongside its SSE stream so it can explain why a
 single policy's alerts have not opened an incident.
 
+`IncidentEvidence` is an in-memory read model kept separately from the live
+simulator snapshot. It captures the dependency neighborhood, deployment and
+log evidence, alerts, and bounded metric histories at incident creation, then
+continues capturing relevant events while the incident remains open. The AI
+investigator consumes this record, so recovery cannot replace its evidence with
+healthy live telemetry.
+
 ## MVP slices
 
 1. **Walking skeleton (this change):** live API Gateway latency from deterministic simulator to dashboard via SSE.

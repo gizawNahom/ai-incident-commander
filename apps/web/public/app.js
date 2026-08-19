@@ -1,4 +1,5 @@
 import { buildTopologyGraph } from "./topology.js";
+import { scenarioControl, serviceOutageRequest } from "./scenario-controls.js";
 
 const byId = (id) => document.getElementById(id);
 const elements = {
@@ -39,6 +40,7 @@ const elements = {
   policySeverity: byId("policy-severity"),
   policyThreshold: byId("policy-threshold"),
   newPolicy: byId("new-policy"),
+  outageTarget: byId("outage-target"),
   cancelPolicy: byId("cancel-policy"),
   recover: byId("recover-system"),
   redisLatency: byId("redis-latency"),
@@ -46,6 +48,9 @@ const elements = {
   serviceGrid: byId("service-grid"),
   stream: byId("stream-status"),
   trigger: byId("trigger-deployment"),
+  triggerKafka: byId("trigger-kafka-backlog"),
+  triggerOutage: byId("trigger-service-outage"),
+  triggerRedis: byId("trigger-redis-degradation"),
   updated: byId("updated-at"),
 };
 
@@ -66,6 +71,9 @@ function formatNumber(value) {
 
 function scenarioCopy(name) {
   if (name === "bad-payment-deployment") return "Defective payment-service v1.8.3 is degrading the checkout path.";
+  if (name === "redis-degradation") return "Redis latency is rising and degrading its dependent request paths.";
+  if (name === "kafka-backlog") return "Kafka consumer lag is delaying downstream event processing.";
+  if (name === "service-outage") return "A simulated component outage is propagating through dependent services.";
   if (name === "recovering") return "Rollback is in progress. Dependency latency is returning to baseline.";
   return "All simulated services are operating within healthy baseline ranges.";
 }
@@ -90,6 +98,7 @@ function renderSystem(nextSystem) {
   elements.checkoutErrors.textContent = formatNumber(checkout.metrics.errorRate);
   elements.redisLatency.textContent = formatNumber(redis.metrics.latencyMs);
   elements.gatewayTraffic.textContent = formatNumber(gateway.metrics.trafficRpm);
+  renderOutageTargets();
 
   renderTopology();
   renderFocus();
@@ -196,7 +205,22 @@ function renderFocus() {
   const service = getService(selectedServiceId);
   if (!service) return;
   const dependencies = service.dependencies.length ? service.dependencies.join("  →  ") : "No direct dependencies";
-  elements.focus.innerHTML = `<h2>${service.name}</h2><p class="${service.health}">${service.health.toUpperCase()} · ${service.version}</p><div class="focus-metrics"><div><span>Latency</span><strong>${formatNumber(service.metrics.latencyMs)} ms</strong></div><div><span>Error rate</span><strong>${formatNumber(service.metrics.errorRate)}%</strong></div><div><span>Traffic</span><strong>${formatNumber(service.metrics.trafficRpm)} rpm</strong></div><div><span>CPU</span><strong>${formatNumber(service.metrics.cpuPercent)}%</strong></div></div><div class="dependency-list">Dependencies<br>${dependencies}</div>`;
+  const queueLag = service.kind === "stream" || service.metrics.queueLag > 0
+    ? `<div><span>Queue lag</span><strong>${formatNumber(service.metrics.queueLag)} messages</strong></div>`
+    : "";
+  elements.focus.innerHTML = `<h2>${service.name}</h2><p class="${service.health}">${service.health.toUpperCase()} · ${service.version}</p><div class="focus-metrics"><div><span>Latency</span><strong>${formatNumber(service.metrics.latencyMs)} ms</strong></div><div><span>Error rate</span><strong>${formatNumber(service.metrics.errorRate)}%</strong></div><div><span>Traffic</span><strong>${formatNumber(service.metrics.trafficRpm)} rpm</strong></div><div><span>CPU</span><strong>${formatNumber(service.metrics.cpuPercent)}%</strong></div>${queueLag}</div><div class="dependency-list">Dependencies<br>${dependencies}</div>`;
+}
+
+function renderOutageTargets() {
+  if (!system) return;
+  const selected = elements.outageTarget.value;
+  elements.outageTarget.replaceChildren(...system.services.map((service) => {
+    const option = document.createElement("option");
+    option.value = service.id;
+    option.textContent = service.name;
+    return option;
+  }));
+  elements.outageTarget.value = system.services.some((service) => service.id === selected) ? selected : "payment-service";
 }
 
 function addEvent(event) {
@@ -219,7 +243,7 @@ function addEvent(event) {
 }
 
 function displayMetric(metric) {
-  return ({ latencyMs: "latency", errorRate: "error rate", trafficRpm: "request volume", cpuPercent: "CPU utilization" })[metric] ?? metric;
+  return ({ latencyMs: "latency", errorRate: "error rate", trafficRpm: "request volume", cpuPercent: "CPU utilization", queueLag: "queue lag" })[metric] ?? metric;
 }
 
 function displayScope(scope) {
@@ -356,10 +380,13 @@ async function savePolicy(event) {
   }
 }
 
-async function sendControl(path, button) {
+async function sendControl(control, button) {
   button.disabled = true;
   try {
-    const response = await fetch(path, { method: "POST" });
+    const response = await fetch(control.path, {
+      method: control.method,
+      ...(control.body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(control.body) } : {}),
+    });
     if (!response.ok) throw new Error("Control request failed");
   } catch (error) {
     addEvent({ type: "log", timestamp: new Date().toISOString(), level: "error", message: error instanceof Error ? error.message : "Control request failed" });
@@ -368,8 +395,11 @@ async function sendControl(path, button) {
   }
 }
 
-elements.trigger.addEventListener("click", () => sendControl("/api/simulator/bad-payment-deployment", elements.trigger));
-elements.recover.addEventListener("click", () => sendControl("/api/simulator/recover", elements.recover));
+elements.trigger.addEventListener("click", () => sendControl(scenarioControl("bad-payment-deployment"), elements.trigger));
+elements.triggerRedis.addEventListener("click", () => sendControl(scenarioControl("redis-degradation"), elements.triggerRedis));
+elements.triggerKafka.addEventListener("click", () => sendControl(scenarioControl("kafka-backlog"), elements.triggerKafka));
+elements.triggerOutage.addEventListener("click", () => sendControl(serviceOutageRequest(elements.outageTarget.value), elements.triggerOutage));
+elements.recover.addEventListener("click", () => sendControl({ method: "POST", path: "/api/simulator/recover" }, elements.recover));
 elements.newPolicy.addEventListener("click", () => openPolicyForm(undefined));
 elements.cancelPolicy.addEventListener("click", closePolicyForm);
 elements.policyScope.addEventListener("change", syncScopeSelector);

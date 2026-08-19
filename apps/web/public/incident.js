@@ -1,19 +1,14 @@
 import { buildTopologyGraph } from "./topology.js";
 import { buildInvestigationView } from "./investigation-view.js";
+import { selectIncidentMetricCards } from "./incident-metrics.js";
 
 const incidentId = new URLSearchParams(window.location.search).get("id");
 const elements = {
   alerts: document.getElementById("room-alerts"),
-  checkoutChart: document.getElementById("checkout-chart"),
-  checkoutCurrent: document.getElementById("checkout-current"),
   error: document.getElementById("room-error"),
   header: document.getElementById("room-header"),
   logs: document.getElementById("room-logs"),
   metrics: document.getElementById("room-metrics"),
-  paymentChart: document.getElementById("payment-chart"),
-  paymentCurrent: document.getElementById("payment-current"),
-  redisChart: document.getElementById("redis-chart"),
-  redisCurrent: document.getElementById("redis-current"),
   services: document.getElementById("room-services"),
   severity: document.getElementById("room-severity"),
   status: document.getElementById("room-status"),
@@ -128,7 +123,7 @@ function renderLogs(logs) {
 }
 
 function renderMetricChart(target, samples, metric) {
-  const values = samples.map((sample) => sample[metric]);
+  const values = samples.map((sample) => sample[metric]).filter((value) => typeof value === "number");
   const maximum = Math.max(1, ...values);
   target.replaceChildren(...values.map((value, index) => {
     const bar = document.createElement("i");
@@ -139,19 +134,30 @@ function renderMetricChart(target, samples, metric) {
 }
 
 function renderMetrics(histories) {
-  const payment = histories.find((history) => history.serviceId === "payment-service");
-  const checkout = histories.find((history) => history.serviceId === "checkout-service");
-  const redis = histories.find((history) => history.serviceId === "redis");
-  if (!payment || !checkout || !redis) return;
-  const currentPayment = payment.samples.at(-1);
-  const currentCheckout = checkout.samples.at(-1);
-  const currentRedis = redis.samples.at(-1);
-  elements.paymentCurrent.textContent = `${format(currentPayment.latencyMs)} ms`;
-  elements.checkoutCurrent.textContent = `${format(currentCheckout.errorRate)}%`;
-  elements.redisCurrent.textContent = `${format(currentRedis.latencyMs)} ms`;
-  renderMetricChart(elements.paymentChart, payment.samples, "latencyMs");
-  renderMetricChart(elements.checkoutChart, checkout.samples, "errorRate");
-  renderMetricChart(elements.redisChart, redis.samples, "latencyMs");
+  const cards = selectIncidentMetricCards({ alerts: incident.alerts, topology: evidence.topology, histories });
+  elements.metrics.hidden = cards.length === 0;
+  const historyByService = new Map(histories.map((history) => [history.serviceId, history]));
+  elements.metrics.replaceChildren(...cards.map((card) => renderMetricCard(card, historyByService.get(card.serviceId))));
+}
+
+function renderMetricCard(card, history) {
+  const current = history?.samples.at(-1)?.[card.metric];
+  const article = element("article");
+  const heading = element("div");
+  heading.append(element("p", "eyebrow", `Incident record / ${card.serviceName}`), element("h2", "", metricLabel(card.metric)));
+  const value = element("strong", "", `${format(typeof current === "number" ? current : 0)} ${metricUnit(card.metric)}`);
+  const chart = element("div", `metric-chart${card.metric === "errorRate" || card.metric === "queueLag" ? " warning" : ""}`);
+  renderMetricChart(chart, history?.samples ?? [], card.metric);
+  article.append(heading, value, chart);
+  return article;
+}
+
+function metricLabel(metric) {
+  return ({ latencyMs: "Latency p95", errorRate: "Error rate", trafficRpm: "Request volume", cpuPercent: "CPU utilization", queueLag: "Queue lag" })[metric] ?? metric;
+}
+
+function metricUnit(metric) {
+  return ({ latencyMs: "ms", errorRate: "%", trafficRpm: "rpm", cpuPercent: "%", queueLag: "messages" })[metric] ?? "";
 }
 
 function renderTopology(topology) {

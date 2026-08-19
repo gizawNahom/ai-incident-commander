@@ -4,7 +4,11 @@
 
 AI Incident Commander is a modular monolith built around an event-producing deterministic simulator. A browser client reads a snapshot for initial state and subscribes to server-sent events (SSE) for small live updates. The same use-case layer later persists incident state to PostgreSQL and can call an AI provider through a narrow investigator port. The application remains usable with the deterministic investigator when no provider is configured.
 
-This first slice deliberately proves the end-to-end seam: simulator → application state → HTTP snapshot/SSE → dashboard. It has one simulated service and one changing latency metric.
+The implemented simulator exposes the same seam for a complete small topology:
+simulator → application state → HTTP snapshot/SSE → dashboard. It has
+deterministic baseline telemetry plus deployment, Redis degradation, Kafka
+backlog, and targeted service-outage scenarios. Queue lag is a first-class
+metric for stream scenarios and can be selected in an alert policy.
 
 ## Proposed repository structure
 
@@ -50,7 +54,8 @@ healthy live telemetry.
 ## MVP slices
 
 1. **Walking skeleton (this change):** live API Gateway latency from deterministic simulator to dashboard via SSE.
-2. Distributed simulator: services, dependencies, baseline telemetry, and failure scenarios.
+2. Distributed simulator: services, dependencies, baseline telemetry, and all
+   required failure scenarios. **Completed.**
 3. Detection: alerts, incident lifecycle, timeline, and audit stream.
 4. Incident Room: topology, evidence, metrics, logs, and timeline.
 5. Grounded investigator: deterministic analysis first; optional Gemini Developer API adapter behind the same port. Provider output is schema-shaped and locally checked against the evidence catalog; absent, failed, or invalid provider output falls back to deterministic analysis.

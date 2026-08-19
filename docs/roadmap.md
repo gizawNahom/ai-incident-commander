@@ -13,9 +13,12 @@ the specification.
 2. **Incident-scoped evidence, in memory — completed.** The Incident Room and
    investigator use a bounded historical record separate from live telemetry,
    so recovery does not obscure the failure story.
-3. **Human-approved simulated mitigation — next.** Implement the action lifecycle
+3. **Behaviorally distinct simulator scenarios — completed.** Redis degradation,
+   Kafka backlog, and validated targeted service outage now complement the
+   existing bad-deployment scenario. Queue lag is available to alert policies.
+4. **Human-approved simulated mitigation — next.** Implement the action lifecycle
    and audit trail; approval alone may invoke a simulator command.
-4. **PostgreSQL persistence.** Add durable storage only after the preceding
+5. **PostgreSQL persistence.** Add durable storage only after the preceding
    product model and workflow have been validated.
 
 ## Deferred infrastructure decision

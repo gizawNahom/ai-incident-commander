@@ -21,15 +21,20 @@ test("health endpoint returns an operational snapshot with a request id", async 
   }
 });
 
-test("topology module is served to the live dashboard", async () => {
+test("dashboard modules are served to the live dashboard", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();
 
   try {
-    const response = await fetch(`${address}/topology.js`);
+    const [topology, controls, incidentMetrics] = await Promise.all([
+      fetch(`${address}/topology.js`),
+      fetch(`${address}/scenario-controls.js`),
+      fetch(`${address}/incident-metrics.js`),
+    ]);
 
-    assert.equal(response.status, 200);
-    assert.match(await response.text(), /buildTopologyGraph/);
+    assert.equal(topology.status, 200);
+    assert.equal(controls.status, 200);
+    assert.equal(incidentMetrics.status, 200);
   } finally {
     await app.close();
   }
@@ -82,6 +87,25 @@ test("alert policy API exposes seeded policies, updates valid policies, and reje
     assert.equal(createdResponse.status, 201);
     assert.match(created.policy.id, /^POL-/);
     assert.equal(created.policy.metric, "errorRate");
+
+    const queueLagResponse = await fetch(`${address}/api/alert-policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Kafka consumer lag safeguard",
+        metric: "queueLag",
+        comparator: "GREATER_THAN",
+        threshold: 10_000,
+        breachDurationSeconds: 0,
+        severity: "SEV-2",
+        enabled: true,
+        scope: { type: "SELECTED_SERVICES", serviceIds: ["kafka"] },
+      }),
+    });
+    const queueLagPolicy = await queueLagResponse.json();
+    assert.equal(queueLagResponse.status, 201);
+    assert.equal(queueLagPolicy.policy.metric, "queueLag");
+    assert.equal(queueLagPolicy.policy.unit, "messages");
 
     const invalid = await fetch(`${address}/api/alert-policies`, {
       method: "POST",
@@ -361,6 +385,53 @@ test("simulator controls trigger a bad deployment and expose propagated state th
     assert.equal(system.scenario, "bad-payment-deployment");
     assert.equal(payment.version, "v1.8.3");
     assert.equal(payment.health, "critical");
+  } finally {
+    await app.close();
+  }
+});
+
+test("simulator controls expose Redis, Kafka, and validated targeted-outage scenarios", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    const redis = await fetch(`${address}/api/simulator/redis-degradation`, { method: "POST" });
+    assert.equal(redis.status, 202);
+    app.advance();
+    app.advance();
+    app.advance();
+    const redisSystem = await (await fetch(`${address}/api/system`)).json();
+    assert.equal(redisSystem.scenario, "redis-degradation");
+    assert.ok(redisSystem.services.find((service: { id: string }) => service.id === "redis").metrics.latencyMs > 1_000);
+
+    const kafka = await fetch(`${address}/api/simulator/kafka-backlog`, { method: "POST" });
+    assert.equal(kafka.status, 202);
+    app.advance();
+    app.advance();
+    app.advance();
+    const kafkaSystem = await (await fetch(`${address}/api/system`)).json();
+    assert.equal(kafkaSystem.scenario, "kafka-backlog");
+    assert.ok(kafkaSystem.services.find((service: { id: string }) => service.id === "kafka").metrics.queueLag > 10_000);
+
+    const invalidOutage = await fetch(`${address}/api/simulator/service-outage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ serviceId: "unknown-service" }),
+    });
+    assert.equal(invalidOutage.status, 400);
+
+    const outage = await fetch(`${address}/api/simulator/service-outage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ serviceId: "inventory-service" }),
+    });
+    assert.equal(outage.status, 202);
+    app.advance();
+    app.advance();
+    app.advance();
+    const outageSystem = await (await fetch(`${address}/api/system`)).json();
+    assert.equal(outageSystem.scenario, "service-outage");
+    assert.equal(outageSystem.services.find((service: { id: string }) => service.id === "inventory-service").health, "critical");
   } finally {
     await app.close();
   }

@@ -15,6 +15,9 @@ type RunningApp = {
   close: () => Promise<void>;
   advance: () => TelemetrySample;
   triggerBadPaymentDeployment: () => void;
+  triggerRedisDegradation: () => void;
+  triggerKafkaBacklog: () => void;
+  triggerServiceOutage: (serviceId: ServiceId) => void;
   recover: () => void;
 };
 
@@ -182,6 +185,38 @@ export function createServer(options: AppOptions = {}): RunningApp {
       json(response, 202, { scenario: "bad-payment-deployment" });
       return;
     }
+    if (url.pathname === "/api/simulator/redis-degradation") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      simulator.triggerRedisDegradation();
+      json(response, 202, { scenario: "redis-degradation" });
+      return;
+    }
+    if (url.pathname === "/api/simulator/kafka-backlog") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      simulator.triggerKafkaBacklog();
+      json(response, 202, { scenario: "kafka-backlog" });
+      return;
+    }
+    if (url.pathname === "/api/simulator/service-outage") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      try {
+        const serviceId = outageServiceId(await readJson(request));
+        simulator.triggerServiceOutage(serviceId);
+        json(response, 202, { scenario: "service-outage", serviceId });
+      } catch (error) {
+        json(response, 400, { error: outageErrorMessage(error), requestId });
+      }
+      return;
+    }
     if (url.pathname === "/api/simulator/recover") {
       if (request.method !== "POST") {
         json(response, 405, { error: "Method not allowed", requestId });
@@ -201,7 +236,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
       return;
     }
     const asset = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-    if (asset === "index.html" || asset === "incident.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "topology.js" || asset === "investigation-view.js") {
+    if (asset === "index.html" || asset === "incident.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "topology.js" || asset === "investigation-view.js" || asset === "scenario-controls.js" || asset === "incident-metrics.js") {
       try {
         const body = await readFile(join(webRoot, asset));
         const contentType = asset.endsWith(".css") ? "text/css" : asset.endsWith(".js") ? "application/javascript" : "text/html";
@@ -219,6 +254,9 @@ export function createServer(options: AppOptions = {}): RunningApp {
   return {
     advance: () => simulator.advance(),
     triggerBadPaymentDeployment: () => simulator.triggerBadPaymentDeployment(),
+    triggerRedisDegradation: () => simulator.triggerRedisDegradation(),
+    triggerKafkaBacklog: () => simulator.triggerKafkaBacklog(),
+    triggerServiceOutage: (serviceId) => simulator.triggerServiceOutage(serviceId),
     recover: () => simulator.recover(),
     listen: () => new Promise((resolve) => httpServer.listen(0, "127.0.0.1", () => {
       const address = httpServer.address();
@@ -268,6 +306,22 @@ async function readJson(request: AsyncIterable<unknown>): Promise<unknown> {
 
 function policyErrorMessage(error: unknown): string {
   return error instanceof AlertPolicyValidationError ? error.message : "Unable to update alert policy";
+}
+
+function outageServiceId(value: unknown): ServiceId {
+  const candidate = isRecord(value) && typeof value.serviceId === "string" ? value.serviceId : null;
+  if (!isServiceId(candidate)) {
+    throw new Error("serviceId must be a known simulated service");
+  }
+  return candidate;
+}
+
+function outageErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unable to start service outage";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isInvestigationTimelineEvent(event: { readonly type: string }): event is { readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED"; readonly timestamp: string; readonly message: string; readonly serviceId?: string } {

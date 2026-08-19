@@ -26,8 +26,15 @@
       </section>
 
       <section class="control-deck" aria-labelledby="chaos-title">
-        <div><p class="eyebrow" id="chaos-title">Simulation controls</p><p>Safely reproduce an evidence-rich payment failure.</p></div>
-        <div class="controls"><button class="button danger" id="trigger-deployment">Deploy payment-service v1.8.3</button><button class="button secondary" id="recover-system">Recover system</button></div>
+        <div><p class="eyebrow" id="chaos-title">Simulation controls</p><p>Trigger independent, evidence-rich failure scenarios without affecting real infrastructure.</p></div>
+        <div class="controls">
+          <button class="button danger" id="trigger-deployment">Deploy bad payment version</button>
+          <button class="button danger" id="trigger-redis-degradation">Degrade Redis</button>
+          <button class="button danger" id="trigger-kafka-backlog">Create Kafka backlog</button>
+          <label class="outage-control">Outage target<select id="outage-target" aria-label="Service outage target"></select></label>
+          <button class="button danger" id="trigger-service-outage">Stop service</button>
+          <button class="button secondary" id="recover-system">Recover system</button>
+        </div>
       </section>
 
       <section class="policy-panel" aria-labelledby="policy-title">
@@ -39,7 +46,7 @@
             <p class="form-error" id="policy-form-error" role="alert" hidden></p>
             <label>Policy name<input id="policy-name" name="name" maxlength="100" required /></label>
             <div class="form-grid">
-              <label>Watch<select id="policy-metric" name="metric"><option value="latencyMs">Latency</option><option value="errorRate">Error rate</option><option value="trafficRpm">Request volume</option><option value="cpuPercent">CPU utilization</option></select></label>
+              <label>Watch<select id="policy-metric" name="metric"><option value="latencyMs">Latency</option><option value="errorRate">Error rate</option><option value="trafficRpm">Request volume</option><option value="cpuPercent">CPU utilization</option><option value="queueLag">Queue lag</option></select></label>
               <label>Condition<select id="policy-comparator" name="comparator"><option value="GREATER_THAN">Above</option><option value="LESS_THAN">Below</option></select></label>
               <label>Threshold<input id="policy-threshold" name="threshold" type="number" min="0" step="0.1" required /></label>
               <label>Must persist (seconds)<input id="policy-duration" name="breachDurationSeconds" type="number" min="0" max="3600" step="1" required /></label>

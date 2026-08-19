@@ -41,7 +41,7 @@ export type DetectedIncident = {
   readonly timeline: readonly IncidentTimelineEvent[];
 };
 
-export type IncidentMetricSample = Readonly<Record<MetricName, number>> & { readonly timestamp: string };
+export type IncidentMetricSample = Readonly<Partial<Record<MetricName, number>>> & { readonly timestamp: string };
 export type IncidentMetricHistory = { readonly serviceId: string; readonly samples: readonly IncidentMetricSample[] };
 export type CapturedLog = { readonly timestamp: string; readonly serviceId: string; readonly level: "warn" | "error" | "info"; readonly message: string };
 export type CapturedDeployment = { readonly timestamp: string; readonly serviceId: string; readonly message: string };
@@ -70,7 +70,7 @@ type ObservedService = {
   readonly id: string;
   readonly name: string;
   readonly dependencies: readonly string[];
-  readonly metrics: Readonly<Record<MetricName, number>>;
+  readonly metrics: Readonly<Partial<Record<MetricName, number>>>;
 };
 
 type ObservedSystem = { readonly timestamp: string; readonly services: readonly ObservedService[] };
@@ -207,9 +207,9 @@ export class IncidentManager {
     if (pair) this.createIncident(event.system, pair);
   }
 
-  private evaluatePolicy(service: ObservedService, policy: MonitoringPolicy, observedValue: number, timestamp: string): void {
+  private evaluatePolicy(service: ObservedService, policy: MonitoringPolicy, observedValue: number | undefined, timestamp: string): void {
     const key = `${policy.id}:${service.id}`;
-    if (!policy.enabled || !policyAppliesToService(policy, service.id) || !policyIsBreached(policy, observedValue)) {
+    if (typeof observedValue !== "number" || !Number.isFinite(observedValue) || !policy.enabled || !policyAppliesToService(policy, service.id) || !policyIsBreached(policy, observedValue)) {
       this.breachStartedAt.delete(key);
       this.activeAlertKeys.delete(key);
       this.activeAlerts.delete(key);

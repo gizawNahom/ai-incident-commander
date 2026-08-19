@@ -1,4 +1,4 @@
-export const alertMetricNames = ["latencyMs", "errorRate", "trafficRpm", "cpuPercent"] as const;
+export const alertMetricNames = ["latencyMs", "errorRate", "trafficRpm", "cpuPercent", "queueLag"] as const;
 
 export type AlertMetricName = (typeof alertMetricNames)[number];
 export type AlertComparator = "GREATER_THAN" | "LESS_THAN";
@@ -13,7 +13,7 @@ export type AlertPolicy = {
   readonly metric: AlertMetricName;
   readonly comparator: AlertComparator;
   readonly threshold: number;
-  readonly unit: "ms" | "%" | "rpm";
+  readonly unit: "ms" | "%" | "rpm" | "messages";
   readonly breachDurationSeconds: number;
   readonly severity: AlertSeverity;
   readonly enabled: boolean;
@@ -52,6 +52,7 @@ export const defaultAlertPolicies: readonly AlertPolicy[] = [
 export function unitForMetric(metric: AlertMetricName): AlertPolicy["unit"] {
   if (metric === "latencyMs") return "ms";
   if (metric === "errorRate" || metric === "cpuPercent") return "%";
+  if (metric === "queueLag") return "messages";
   return "rpm";
 }
 

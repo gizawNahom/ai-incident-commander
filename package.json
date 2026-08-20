@@ -5,10 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "node --experimental-strip-types apps/api/src/server.ts",
-    "test": "node --experimental-strip-types --test apps/api/test/**/*.test.ts apps/web/test/**/*.test.js packages/ai/test/**/*.test.ts packages/domain/test/**/*.test.ts",
+    "test": "npm run test:unit && npm run test:acceptance",
+    "test:unit": "node --experimental-strip-types --test apps/api/test/**/*.test.ts apps/web/test/**/*.test.js packages/ai/test/**/*.test.ts packages/domain/test/**/*.test.ts",
+    "test:acceptance": "node --experimental-strip-types node_modules/@cucumber/cucumber/bin/cucumber-js apps/acceptance/features --import apps/acceptance/steps/incident-lifecycle.steps.ts --format progress",
     "check": "node --experimental-strip-types --check apps/api/src/server.ts"
   },
   "engines": {
     "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^13.2.1"
   }
 }

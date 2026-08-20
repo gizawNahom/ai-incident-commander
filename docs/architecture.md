@@ -51,6 +51,20 @@ continues capturing relevant events while the incident remains open. The AI
 investigator consumes this record, so recovery cannot replace its evidence with
 healthy live telemetry.
 
+`IncidentManager` keeps incident records independently in memory rather than
+holding one global active incident. A record moves to `MONITORING` after three
+consecutive snapshots show none of its source alert conditions active; an
+engineer then explicitly resolves it. If the same policy-and-service alert pair
+returns before resolution, that record moves back to `INVESTIGATING`. This
+conservative correlation signature avoids merging a separate failure merely
+because it shares a broad topology with another incident.
+
+Business-level acceptance coverage lives in executable Gherkin feature files
+under `apps/acceptance/features`. Their Cucumber steps start a fresh real HTTP
+server and deterministic simulator for every scenario. This exercises the
+public API, incident manager, and simulator together without mocks; browser
+automation remains a later complement for the flagship visual workflow.
+
 ## MVP slices
 
 1. **Walking skeleton (this change):** live API Gateway latency from deterministic simulator to dashboard via SSE.

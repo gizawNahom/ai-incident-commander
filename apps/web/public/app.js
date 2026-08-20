@@ -15,14 +15,8 @@ const elements = {
   focus: byId("service-focus"),
   gatewayTraffic: byId("gateway-traffic"),
   health: byId("system-health"),
-  incidentAlerts: byId("incident-alerts"),
+  incidentList: byId("incident-list"),
   incidentPanel: byId("incident-panel"),
-  incidentRoomLink: byId("incident-room-link"),
-  incidentSeverity: byId("incident-severity"),
-  incidentStatus: byId("incident-status"),
-  incidentSubtitle: byId("incident-subtitle"),
-  incidentTimeline: byId("incident-timeline"),
-  incidentTitle: byId("incident-title"),
   paymentLatency: byId("payment-latency"),
   policyComparator: byId("policy-comparator"),
   policyDuration: byId("policy-duration"),
@@ -55,7 +49,7 @@ const elements = {
 };
 
 let system;
-let incident;
+let incidents = [];
 let selectedServiceId = "payment-service";
 let policies = [];
 let editingPolicyId;
@@ -154,33 +148,74 @@ function renderTopology() {
   elements.serviceGrid.replaceChildren(canvas);
 }
 
-function renderIncident(nextIncident) {
-  incident = nextIncident;
-  elements.activeIncidents.textContent = incident ? "1" : "0";
-  if (!incident) {
-    elements.incidentPanel.hidden = true;
-    return;
+function renderIncidents(nextIncidents) {
+  incidents = nextIncidents;
+  const active = incidents.filter((incident) => incident.status !== "RESOLVED");
+  elements.activeIncidents.textContent = String(active.length);
+  elements.incidentPanel.hidden = active.length === 0;
+  if (active.length === 0) return;
+  elements.incidentList.replaceChildren(...active.map(renderIncidentCard));
+}
+
+function renderIncidentCard(incident) {
+  const item = document.createElement("li");
+  item.className = "incident-card";
+  const heading = document.createElement("div");
+  heading.className = "incident-heading";
+  const identity = document.createElement("div");
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = `Created ${new Date(incident.startedAt).toLocaleTimeString()} after correlated alerts`;
+  const title = document.createElement("h3");
+  title.textContent = `${incident.id} — ${incident.title}`;
+  identity.append(eyebrow, title);
+  const actions = document.createElement("div");
+  actions.className = "incident-actions";
+  const tags = document.createElement("div");
+  tags.className = "incident-tags";
+  const severity = document.createElement("strong");
+  severity.textContent = incident.severity;
+  const status = document.createElement("span");
+  status.textContent = incident.status;
+  tags.append(severity, status);
+  const link = document.createElement("a");
+  link.className = "incident-room-link";
+  link.href = `/incident.html?id=${encodeURIComponent(incident.id)}`;
+  link.innerHTML = "Open Incident Room <span>→</span>";
+  actions.append(tags, link);
+  heading.append(identity, actions);
+  const body = document.createElement("div");
+  body.className = "incident-body";
+  const evidence = document.createElement("div");
+  const evidenceLabel = document.createElement("p");
+  evidenceLabel.className = "eyebrow";
+  evidenceLabel.textContent = "Detection evidence";
+  const alerts = document.createElement("ul");
+  alerts.append(...incident.alerts.map((alert) => {
+    const alertItem = document.createElement("li");
+    alertItem.textContent = `${alert.title}: ${formatNumber(alert.observedValue)}${alert.unit} observed`;
+    return alertItem;
+  }));
+  evidence.append(evidenceLabel, alerts);
+  const latest = document.createElement("div");
+  const latestLabel = document.createElement("p");
+  latestLabel.className = "eyebrow";
+  latestLabel.textContent = "Latest lifecycle event";
+  const timeline = document.createElement("ol");
+  const entry = incident.timeline.at(-1);
+  if (entry) {
+    const timelineItem = document.createElement("li");
+    timelineItem.textContent = `${new Date(entry.timestamp).toLocaleTimeString()} · ${entry.message}`;
+    timeline.append(timelineItem);
   }
-  elements.incidentPanel.hidden = false;
-  elements.incidentTitle.textContent = `${incident.id} — ${incident.title}`;
-  elements.incidentRoomLink.href = `/incident.html?id=${encodeURIComponent(incident.id)}`;
-  elements.incidentSeverity.textContent = incident.severity;
-  elements.incidentStatus.textContent = incident.status;
-  elements.incidentSubtitle.textContent = `Created at ${new Date(incident.startedAt).toLocaleTimeString()} after correlated service alerts.`;
-  elements.incidentAlerts.replaceChildren(...incident.alerts.map((alert) => {
-    const item = document.createElement("li");
-    item.textContent = `${alert.title}: ${formatNumber(alert.observedValue)}${alert.unit} observed`;
-    return item;
-  }));
-  elements.incidentTimeline.replaceChildren(...incident.timeline.map((entry) => {
-    const item = document.createElement("li");
-    item.innerHTML = `<time>${new Date(entry.timestamp).toLocaleTimeString()}</time><span class="timeline-type">${entry.type.replaceAll("_", " ")}</span>${entry.message}`;
-    return item;
-  }));
+  latest.append(latestLabel, timeline);
+  body.append(evidence, latest);
+  item.append(heading, body);
+  return item;
 }
 
 function renderDetectionStatus(status) {
-  const waiting = status.state === "WAITING_FOR_CORRELATED_EVIDENCE" && !incident;
+  const waiting = status.state === "WAITING_FOR_CORRELATED_EVIDENCE" && !incidents.some((incident) => incident.status !== "RESOLVED");
   elements.detectionPanel.hidden = !waiting;
   if (!waiting) return;
   elements.detectionMessage.textContent = status.message;
@@ -406,7 +441,7 @@ elements.policyScope.addEventListener("change", syncScopeSelector);
 elements.policyForm.addEventListener("submit", savePolicy);
 
 fetch("/api/system").then((response) => response.json()).then(renderSystem).catch(() => { elements.description.textContent = "Unable to load the simulator snapshot."; });
-fetch("/api/incidents").then((response) => response.json()).then((payload) => renderIncident(payload.incidents[0])).catch(() => renderIncident(undefined));
+fetch("/api/incidents").then((response) => response.json()).then((payload) => renderIncidents(payload.incidents)).catch(() => renderIncidents([]));
 refreshDetectionStatus();
 fetch("/api/alert-policies").then((response) => response.json()).then((payload) => renderPolicies(payload.policies)).catch(() => {
   const error = document.createElement("li");
@@ -423,7 +458,12 @@ liveEvents.addEventListener("alert-triggered", (event) => { addEvent(JSON.parse(
 liveEvents.addEventListener("incident-created", (event) => {
   const change = JSON.parse(event.data);
   addEvent(change);
-  renderIncident(change.incident);
+  renderIncidents([...incidents, change.incident]);
+  refreshDetectionStatus();
+});
+liveEvents.addEventListener("incident-updated", (event) => {
+  const change = JSON.parse(event.data);
+  renderIncidents(incidents.map((incident) => incident.id === change.incident.id ? change.incident : incident));
   refreshDetectionStatus();
 });
 liveEvents.addEventListener("error", () => { elements.stream.textContent = "Reconnecting"; });

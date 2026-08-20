@@ -217,3 +217,43 @@ test("records deterministic investigation activity in the incident timeline", ()
   assert.ok(timeline.some((event) => event.type === "ACTION_SUGGESTED" && /Rollback/.test(event.message)));
   assert.equal(changes.filter((event) => event.type === "incident-updated").length, updatesBeforeInvestigation + 1);
 });
+
+test("keeps independent incidents, monitors sustained recovery, and reopens only the matching unresolved incident", () => {
+  const manager = new IncidentManager({ firstIncidentNumber: 2000 });
+  const snapshot = (timestamp: string, failing: "both" | "billing" | "healthy") => ({
+    type: "system" as const,
+    system: {
+      timestamp,
+      services: [
+        { id: "billing-api", name: "Billing API", dependencies: ["billing-db"], metrics: { latencyMs: failing === "both" || failing === "billing" ? 1_500 : 90, errorRate: 0 } },
+        { id: "billing-db", name: "Billing DB", dependencies: [], metrics: { latencyMs: 12, errorRate: failing === "both" || failing === "billing" ? 22 : 0 } },
+        { id: "shipping-api", name: "Shipping API", dependencies: ["shipping-db"], metrics: { latencyMs: failing === "both" ? 1_400 : 95, errorRate: 0 } },
+        { id: "shipping-db", name: "Shipping DB", dependencies: [], metrics: { latencyMs: 10, errorRate: failing === "both" ? 18 : 0 } },
+      ],
+    },
+  });
+
+  manager.observe(snapshot("2026-08-13T12:00:00.000Z", "both"));
+  assert.equal(manager.list().length, 2);
+  const [billingIncident, shippingIncident] = manager.list();
+  assert.deepEqual(billingIncident.affectedServices, ["billing-api", "billing-db"]);
+  assert.deepEqual(shippingIncident.affectedServices, ["shipping-api", "shipping-db"]);
+  const shippingCreationEvents = shippingIncident.timeline.filter((event) => event.type === "INCIDENT_CREATED");
+  assert.equal(shippingCreationEvents.length, 1);
+  assert.match(shippingCreationEvents[0]?.message ?? "", /INC-2001 created/);
+
+  manager.observe(snapshot("2026-08-13T12:00:02.000Z", "healthy"));
+  manager.observe(snapshot("2026-08-13T12:00:04.000Z", "healthy"));
+  manager.observe(snapshot("2026-08-13T12:00:06.000Z", "healthy"));
+  assert.equal(manager.find(billingIncident.id)?.status, "MONITORING");
+  assert.equal(manager.find(shippingIncident.id)?.status, "MONITORING");
+
+  manager.observe(snapshot("2026-08-13T12:00:08.000Z", "billing"));
+  assert.equal(manager.list().length, 2);
+  assert.equal(manager.find(billingIncident.id)?.status, "INVESTIGATING");
+  assert.equal(manager.find(shippingIncident.id)?.status, "MONITORING");
+
+  manager.resolve(shippingIncident.id, "2026-08-13T12:00:09.000Z", "Engineer (demo)");
+  assert.equal(manager.find(shippingIncident.id)?.status, "RESOLVED");
+  assert.ok(manager.find(shippingIncident.id)?.timeline.some((event) => event.type === "INCIDENT_RESOLVED"));
+});

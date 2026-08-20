@@ -23,6 +23,7 @@ const elements = {
   investigator: document.getElementById("room-investigator"),
   investigationResult: document.getElementById("investigation-result"),
   liveState: document.getElementById("room-live-state"),
+  resolveButton: document.getElementById("resolve-incident"),
 };
 
 let incident;
@@ -52,6 +53,7 @@ function renderIncident(nextIncident) {
   elements.status.textContent = incident.status;
   elements.services.textContent = incident.affectedServices.length;
   elements.alertCount.textContent = incident.alerts.length;
+  elements.resolveButton.hidden = incident.status !== "MONITORING";
   elements.alerts.replaceChildren(...incident.alerts.map((alert) => {
     const item = document.createElement("li");
     item.innerHTML = `<strong>${alert.title}</strong><span>${format(alert.observedValue)}${alert.unit} observed · threshold ${alert.threshold}${alert.unit}</span>`;
@@ -256,6 +258,23 @@ elements.investigateButton.addEventListener("click", async () => {
   } finally {
     elements.investigateButton.disabled = false;
     elements.investigateButton.textContent = "Analyze again";
+  }
+});
+
+elements.resolveButton.addEventListener("click", async () => {
+  if (!incident) return;
+  elements.resolveButton.disabled = true;
+  elements.resolveButton.textContent = "Resolving…";
+  try {
+    const response = await fetch(`/api/incidents/${encodeURIComponent(incident.id)}/resolve`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error ?? "Unable to resolve incident");
+    renderIncident(payload);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Unable to resolve incident.");
+  } finally {
+    elements.resolveButton.disabled = false;
+    elements.resolveButton.textContent = "Resolve incident";
   }
 });
 

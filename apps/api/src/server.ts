@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
-import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
+import { IncidentManager, IncidentResolutionError, type IncidentEvent } from "./incident-manager.ts";
 import { AlertPolicyNotFoundError, AlertPolicyStore, AlertPolicyValidationError } from "./alert-policy-store.ts";
 import { DeterministicInvestigator, type IncidentInvestigator, type Investigation } from "../../../packages/ai/src/deterministic-investigator.ts";
 import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
@@ -164,6 +164,21 @@ export function createServer(options: AppOptions = {}): RunningApp {
         return;
       }
       json(response, 200, evidence);
+      return;
+    }
+    if (url.pathname.startsWith("/api/incidents/") && url.pathname.endsWith("/resolve")) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      const incidentId = decodeURIComponent(url.pathname.slice("/api/incidents/".length, -"/resolve".length));
+      try {
+        const incident = incidentManager.resolve(incidentId, simulator.snapshot().timestamp, "Engineer (demo)");
+        json(response, 200, incident);
+      } catch (error) {
+        const status = error instanceof IncidentResolutionError && error.message === "Incident not found" ? 404 : 409;
+        json(response, status, { error: error instanceof Error ? error.message : "Unable to resolve incident", requestId });
+      }
       return;
     }
     if (url.pathname.startsWith("/api/incidents/")) {

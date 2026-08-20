@@ -24,7 +24,7 @@ export type Alert = {
 };
 
 export type IncidentTimelineEvent = {
-  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED";
+  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED" | "RECOVERY_MONITORING" | "INCIDENT_REOPENED" | "INCIDENT_RESOLVED";
   readonly timestamp: string;
   readonly message: string;
   readonly serviceId?: string;
@@ -34,8 +34,9 @@ export type DetectedIncident = {
   readonly id: string;
   readonly title: string;
   readonly severity: "SEV-1";
-  readonly status: "DETECTED";
+  readonly status: "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED";
   readonly startedAt: string;
+  readonly resolvedAt?: string;
   readonly affectedServices: readonly string[];
   readonly alerts: readonly Alert[];
   readonly timeline: readonly IncidentTimelineEvent[];
@@ -66,6 +67,8 @@ export type DetectionStatus = {
   readonly activeAlerts: readonly Alert[];
 };
 
+export class IncidentResolutionError extends Error {}
+
 type ObservedService = {
   readonly id: string;
   readonly name: string;
@@ -81,12 +84,20 @@ type OperationalEvent =
   | { readonly type: "telemetry" };
 type Subscriber = (event: IncidentEvent) => void;
 
+type IncidentRecord = {
+  readonly correlationKey: string;
+  readonly evidence: IncidentEvidence;
+  readonly healthyObservations: number;
+  readonly incident: DetectedIncident;
+};
+
 const MAX_PRE_INCIDENT_SAMPLES = 30;
 const MAX_INCIDENT_SAMPLES = 240;
 const PRESERVED_OPENING_SAMPLES = 60;
 const MAX_CAPTURED_LOGS = 250;
 const PRESERVED_OPENING_LOGS = 100;
 const MAX_CONTEXT_SERVICES = 12;
+const RECOVERY_OBSERVATIONS_REQUIRED = 3;
 
 type IncidentManagerOptions = {
   readonly policies?: readonly MonitoringPolicy[];
@@ -106,8 +117,7 @@ export class IncidentManager {
   private policies: readonly MonitoringPolicy[];
   private readonly correlationWindowMs: number;
   private nextIncidentNumber: number;
-  private incident: DetectedIncident | undefined;
-  private incidentEvidence: IncidentEvidence | undefined;
+  private readonly records = new Map<string, IncidentRecord>();
 
   constructor(options: IncidentManagerOptions = {}) {
     this.policies = options.policies ?? defaultAlertPolicies;
@@ -121,15 +131,15 @@ export class IncidentManager {
   }
 
   list(): readonly DetectedIncident[] {
-    return this.incident ? [this.incident] : [];
+    return [...this.records.values()].map((record) => record.incident);
   }
 
   find(id: string): DetectedIncident | undefined {
-    return this.incident?.id === id ? this.incident : undefined;
+    return this.records.get(id)?.incident;
   }
 
   evidenceFor(id: string): IncidentEvidence | undefined {
-    return this.incident?.id === id ? this.incidentEvidence : undefined;
+    return this.records.get(id)?.evidence;
   }
 
   setPolicies(policies: readonly MonitoringPolicy[]): void {
@@ -141,7 +151,7 @@ export class IncidentManager {
 
   detectionStatus(): DetectionStatus {
     const activeAlerts = [...this.activeAlerts.values()];
-    if (this.incident) {
+    if ([...this.records.values()].some((record) => record.incident.status !== "RESOLVED")) {
       return {
         state: "INCIDENT_CREATED",
         message: "Correlated alerts created an incident.",
@@ -163,15 +173,33 @@ export class IncidentManager {
   }
 
   recordInvestigation(input: { readonly incidentId: string; readonly timestamp: string; readonly hypothesis: string; readonly suggestedAction?: string }): void {
-    if (!this.incident || this.incident.id !== input.incidentId) return;
+    const record = this.records.get(input.incidentId);
+    if (!record || record.incident.status === "RESOLVED") return;
     const timeline: IncidentTimelineEvent[] = [
-      ...this.incident.timeline,
+      ...record.incident.timeline,
       { type: "AI_ANALYSIS_STARTED", timestamp: input.timestamp, message: "Offline investigator analysis started" },
       { type: "AI_HYPOTHESIS_GENERATED", timestamp: input.timestamp, message: input.hypothesis },
       ...(input.suggestedAction ? [{ type: "ACTION_SUGGESTED" as const, timestamp: input.timestamp, message: input.suggestedAction }] : []),
     ];
-    this.incident = { ...this.incident, timeline };
-    this.publish({ type: "incident-updated", incident: this.incident });
+    this.updateRecord(input.incidentId, { ...record, incident: { ...record.incident, timeline } });
+  }
+
+  resolve(incidentId: string, timestamp: string, actor: string): DetectedIncident {
+    const record = this.records.get(incidentId);
+    if (!record) throw new IncidentResolutionError("Incident not found");
+    if (record.incident.status !== "MONITORING") throw new IncidentResolutionError("Only an incident in monitoring can be resolved");
+    const incident: DetectedIncident = {
+      ...record.incident,
+      status: "RESOLVED",
+      resolvedAt: timestamp,
+      timeline: [...record.incident.timeline, {
+        type: "INCIDENT_RESOLVED",
+        timestamp,
+        message: `${actor} resolved this incident after recovery monitoring`,
+      }],
+    };
+    this.updateRecord(incidentId, { ...record, incident });
+    return incident;
   }
 
   observe(event: OperationalEvent): void {
@@ -192,19 +220,15 @@ export class IncidentManager {
     if (event.type !== "system") return;
 
     this.recordRecentMetrics(event.system);
-    if (this.incident) {
-      this.captureMetrics(event.system);
-      return;
-    }
-
     for (const service of event.system.services) {
       for (const policy of this.policies) {
         const observedValue = service.metrics[policy.metric];
         this.evaluatePolicy(service, policy, observedValue, event.system.timestamp);
       }
     }
-    const pair = this.findCorrelatedPair(event.system);
-    if (pair) this.createIncident(event.system, pair);
+    this.captureMetrics(event.system);
+    for (const pair of this.findCorrelatedPairs(event.system)) this.handleCorrelatedPair(event.system, pair);
+    this.observeRecovery(event.system);
   }
 
   private evaluatePolicy(service: ObservedService, policy: MonitoringPolicy, observedValue: number | undefined, timestamp: string): void {
@@ -243,19 +267,44 @@ export class IncidentManager {
     this.publish({ type: "alert-triggered", alert });
   }
 
-  private findCorrelatedPair(system: ObservedSystem): readonly [Alert, Alert] | undefined {
-    const recentAlerts = this.alerts.filter((alert) => elapsedMs(system.timestamp, alert.triggeredAt) <= this.correlationWindowMs);
+  private findCorrelatedPairs(system: ObservedSystem): readonly (readonly [Alert, Alert])[] {
+    const pairs: (readonly [Alert, Alert])[] = [];
+    const recentAlerts = [...this.activeAlerts.values()].filter((alert) => elapsedMs(system.timestamp, alert.triggeredAt) <= this.correlationWindowMs);
     for (let first = 0; first < recentAlerts.length; first += 1) {
       for (let second = first + 1; second < recentAlerts.length; second += 1) {
         const left = recentAlerts[first];
         const right = recentAlerts[second];
-        if (left.policyId !== right.policyId && areConnected(system.services, left.serviceId, right.serviceId)) return [left, right];
+        if (left.policyId !== right.policyId && areConnected(system.services, left.serviceId, right.serviceId)) pairs.push([left, right]);
       }
     }
-    return undefined;
+    return pairs;
   }
 
-  private createIncident(system: ObservedSystem, pair: readonly [Alert, Alert]): void {
+  private handleCorrelatedPair(system: ObservedSystem, pair: readonly [Alert, Alert]): void {
+    const correlationKey = pairCorrelationKey(pair);
+    const pairAlertKeys = new Set(pair.map(alertKey));
+    const matching = [...this.records.values()].find((record) => record.incident.status !== "RESOLVED" && (
+      record.correlationKey === correlationKey || record.incident.alerts.some((alert) => pairAlertKeys.has(alertKey(alert)))
+    ));
+    if (!matching) {
+      this.createIncident(system, pair, correlationKey);
+      return;
+    }
+    if (matching.incident.status === "MONITORING") {
+      const incident: DetectedIncident = {
+        ...matching.incident,
+        status: "INVESTIGATING",
+        timeline: [...matching.incident.timeline, {
+          type: "INCIDENT_REOPENED",
+          timestamp: system.timestamp,
+          message: "Related alert conditions returned during recovery monitoring",
+        }],
+      };
+      this.updateRecord(incident.id, { ...matching, healthyObservations: 0, incident });
+    }
+  }
+
+  private createIncident(system: ObservedSystem, pair: readonly [Alert, Alert], correlationKey: string): void {
     const incidentId = `INC-${this.nextIncidentNumber}`;
     this.nextIncidentNumber += 1;
     const alertServices = [...new Set(pair.map((alert) => alert.serviceId))].sort();
@@ -269,7 +318,7 @@ export class IncidentManager {
     };
     this.recordEvidence(creation);
     const incidentServices = new Set(alertServices);
-    this.incident = {
+    const incident: DetectedIncident = {
       id: incidentId,
       title,
       severity: "SEV-1",
@@ -277,10 +326,18 @@ export class IncidentManager {
       startedAt: system.timestamp,
       affectedServices: alertServices,
       alerts: [...pair],
-      timeline: this.timelineEvidence.filter((event) => !event.serviceId || [...incidentServices].some((serviceId) => areConnected(system.services, event.serviceId ?? "", serviceId))),
+      timeline: [
+        ...this.timelineEvidence.filter((event) => event.type !== "INCIDENT_CREATED" && (!event.serviceId || [...incidentServices].some((serviceId) => areConnected(system.services, event.serviceId ?? "", serviceId)))),
+        creation,
+      ],
     };
-    this.incidentEvidence = this.createEvidence(system, pair, incidentServices);
-    this.publish({ type: "incident-created", incident: this.incident });
+    this.records.set(incidentId, {
+      correlationKey,
+      evidence: this.createEvidence(system, pair, incidentServices),
+      healthyObservations: 0,
+      incident,
+    });
+    this.publish({ type: "incident-created", incident });
   }
 
   private recordEvidence(event: IncidentTimelineEvent): void {
@@ -313,38 +370,68 @@ export class IncidentManager {
   }
 
   private captureMetrics(system: ObservedSystem): void {
-    if (!this.incidentEvidence) return;
-    const histories = new Map(this.incidentEvidence.metricHistories.map((history) => [history.serviceId, [...history.samples]]));
-    for (const service of system.services) {
-      const samples = histories.get(service.id);
-      if (!samples) continue;
-      pushBounded(samples, { timestamp: system.timestamp, ...service.metrics }, MAX_INCIDENT_SAMPLES, PRESERVED_OPENING_SAMPLES);
-      histories.set(service.id, samples);
+    for (const [incidentId, record] of this.records) {
+      if (record.incident.status === "RESOLVED") continue;
+      const histories = new Map(record.evidence.metricHistories.map((history) => [history.serviceId, [...history.samples]]));
+      for (const service of system.services) {
+        const samples = histories.get(service.id);
+        if (!samples) continue;
+        pushBounded(samples, { timestamp: system.timestamp, ...service.metrics }, MAX_INCIDENT_SAMPLES, PRESERVED_OPENING_SAMPLES);
+        histories.set(service.id, samples);
+      }
+      this.records.set(incidentId, { ...record, evidence: { ...record.evidence, metricHistories: [...histories].map(([serviceId, samples]) => ({ serviceId, samples })) } });
     }
-    this.incidentEvidence = { ...this.incidentEvidence, metricHistories: [...histories].map(([serviceId, samples]) => ({ serviceId, samples })) };
   }
 
   private captureLog(timelineEvent: IncidentTimelineEvent, log: CapturedLog): void {
-    if (!this.incidentEvidence || !this.incidentEvidence.contextServiceIds.includes(log.serviceId)) return;
-    const logs = [...this.incidentEvidence.logs];
-    pushBounded(logs, log, MAX_CAPTURED_LOGS, PRESERVED_OPENING_LOGS);
-    this.incidentEvidence = { ...this.incidentEvidence, logs };
-    this.appendIncidentTimeline(timelineEvent);
+    for (const [incidentId, record] of this.records) {
+      if (record.incident.status === "RESOLVED" || !record.evidence.contextServiceIds.includes(log.serviceId)) continue;
+      const logs = [...record.evidence.logs];
+      pushBounded(logs, log, MAX_CAPTURED_LOGS, PRESERVED_OPENING_LOGS);
+      this.updateRecord(incidentId, { ...record, evidence: { ...record.evidence, logs }, incident: { ...record.incident, timeline: [...record.incident.timeline, timelineEvent] } });
+    }
   }
 
   private captureDeployment(timelineEvent: IncidentTimelineEvent): void {
-    if (!this.incidentEvidence || !timelineEvent.serviceId || !this.incidentEvidence.contextServiceIds.includes(timelineEvent.serviceId)) return;
-    this.incidentEvidence = {
-      ...this.incidentEvidence,
-      deployments: [...this.incidentEvidence.deployments, { timestamp: timelineEvent.timestamp, serviceId: timelineEvent.serviceId, message: timelineEvent.message }],
-    };
-    this.appendIncidentTimeline(timelineEvent);
+    for (const [incidentId, record] of this.records) {
+      if (record.incident.status === "RESOLVED" || !timelineEvent.serviceId || !record.evidence.contextServiceIds.includes(timelineEvent.serviceId)) continue;
+      this.updateRecord(incidentId, {
+        ...record,
+        evidence: { ...record.evidence, deployments: [...record.evidence.deployments, { timestamp: timelineEvent.timestamp, serviceId: timelineEvent.serviceId, message: timelineEvent.message }] },
+        incident: { ...record.incident, timeline: [...record.incident.timeline, timelineEvent] },
+      });
+    }
   }
 
-  private appendIncidentTimeline(event: IncidentTimelineEvent): void {
-    if (!this.incident) return;
-    this.incident = { ...this.incident, timeline: [...this.incident.timeline, event] };
-    this.publish({ type: "incident-updated", incident: this.incident });
+  private observeRecovery(system: ObservedSystem): void {
+    for (const [incidentId, record] of this.records) {
+      if (record.incident.status === "RESOLVED") continue;
+      const hasActiveSourceAlert = record.incident.alerts.some((alert) => this.activeAlerts.has(alertKey(alert)));
+      if (hasActiveSourceAlert) {
+        if (record.healthyObservations !== 0) this.records.set(incidentId, { ...record, healthyObservations: 0 });
+        continue;
+      }
+      const healthyObservations = record.healthyObservations + 1;
+      if (healthyObservations < RECOVERY_OBSERVATIONS_REQUIRED || record.incident.status === "MONITORING") {
+        this.records.set(incidentId, { ...record, healthyObservations });
+        continue;
+      }
+      const incident: DetectedIncident = {
+        ...record.incident,
+        status: "MONITORING",
+        timeline: [...record.incident.timeline, {
+          type: "RECOVERY_MONITORING",
+          timestamp: system.timestamp,
+          message: `Affected alert conditions remained healthy for ${RECOVERY_OBSERVATIONS_REQUIRED} observations; monitoring recovery`,
+        }],
+      };
+      this.updateRecord(incidentId, { ...record, healthyObservations, incident });
+    }
+  }
+
+  private updateRecord(incidentId: string, record: IncidentRecord): void {
+    this.records.set(incidentId, record);
+    this.publish({ type: "incident-updated", incident: record.incident });
   }
 
   private publish(event: IncidentEvent): void {
@@ -354,6 +441,14 @@ export class IncidentManager {
 
 function elapsedMs(laterTimestamp: string, earlierTimestamp: string): number {
   return Math.max(0, Date.parse(laterTimestamp) - Date.parse(earlierTimestamp));
+}
+
+function alertKey(alert: Pick<Alert, "policyId" | "serviceId">): string {
+  return `${alert.policyId}:${alert.serviceId}`;
+}
+
+function pairCorrelationKey(pair: readonly [Alert, Alert]): string {
+  return pair.map(alertKey).sort().join("|");
 }
 
 function areConnected(services: readonly ObservedService[], from: string, to: string): boolean {

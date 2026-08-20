@@ -21,6 +21,33 @@ test("health endpoint returns an operational snapshot with a request id", async 
   }
 });
 
+test("an engineer can resolve a monitored incident through the API", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    await fetch(`${address}/api/simulator/recover`, { method: "POST" });
+    for (let tick = 0; tick < 6; tick += 1) app.advance();
+
+    const monitoring = await (await fetch(`${address}/api/incidents/INC-1042`)).json();
+    assert.equal(monitoring.status, "MONITORING");
+
+    const resolveResponse = await fetch(`${address}/api/incidents/INC-1042/resolve`, { method: "POST" });
+    const resolved = await resolveResponse.json();
+    assert.equal(resolveResponse.status, 200);
+    assert.equal(resolved.status, "RESOLVED");
+    assert.ok(resolved.resolvedAt);
+    assert.ok(resolved.timeline.some((event: { type: string }) => event.type === "INCIDENT_RESOLVED"));
+  } finally {
+    await app.close();
+  }
+});
+
 test("dashboard modules are served to the live dashboard", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();

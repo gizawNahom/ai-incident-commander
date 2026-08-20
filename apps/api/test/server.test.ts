@@ -99,6 +99,44 @@ test("dashboard modules are served to the live dashboard", async () => {
   }
 });
 
+test("service read models expose live evidence, relationships, and related incidents", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const servicesResponse = await fetch(`${address}/api/services`);
+    const services = await servicesResponse.json();
+    assert.equal(servicesResponse.status, 200);
+    assert.equal(services.services.length, 9);
+    const payment = services.services.find((service: { id: string }) => service.id === "payment-service");
+    assert.equal(payment.health, "critical");
+    assert.equal(payment.activeAlertCount, 2);
+    assert.equal(payment.relatedIncidentCount, 1);
+
+    const detailResponse = await fetch(`${address}/api/services/payment-service`);
+    const detail = await detailResponse.json();
+    assert.equal(detailResponse.status, 200);
+    assert.equal(detail.service.id, "payment-service");
+    assert.ok(detail.history.samples.some((sample: { latencyMs: number }) => sample.latencyMs > 1_000));
+    assert.ok(detail.logs.some((entry: { serviceId: string }) => entry.serviceId === "payment-service"));
+    assert.ok(detail.deployments.some((entry: { version: string }) => entry.version === "v1.8.3"));
+    assert.deepEqual(detail.dependencies.map((service: { id: string }) => service.id), ["redis", "kafka", "postgresql"]);
+    assert.ok(detail.dependents.some((service: { id: string }) => service.id === "checkout-service"));
+    assert.equal(detail.activeAlerts.length, 2);
+    assert.equal(detail.relatedIncidents.length, 1);
+
+    const invalidResponse = await fetch(`${address}/api/services/not-a-service`);
+    assert.equal(invalidResponse.status, 404);
+  } finally {
+    await app.close();
+  }
+});
+
 test("alert policy API exposes seeded policies, updates valid policies, and rejects invalid policy input", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();

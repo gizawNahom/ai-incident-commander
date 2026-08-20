@@ -51,6 +51,14 @@ continues capturing relevant events while the incident remains open. The AI
 investigator consumes this record, so recovery cannot replace its evidence with
 healthy live telemetry.
 
+The Services and Incident History screens use explicit in-memory read models:
+the simulator retains bounded emitted deployment/log history, while the
+incident manager supplies active alerts and preserved incident context.
+`GET /api/services`, `GET /api/services/:id`, and filtered `GET /api/incidents`
+compose those sources without inventing UI state. A service is related to an
+incident if it was directly affected or appears in that incident's preserved
+dependency context. This is intentionally ephemeral until the PostgreSQL slice.
+
 `IncidentManager` keeps incident records independently in memory rather than
 holding one global active incident. A record moves to `MONITORING` after three
 consecutive snapshots show none of its source alert conditions active; an

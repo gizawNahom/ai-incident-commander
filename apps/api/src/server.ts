@@ -78,6 +78,50 @@ export function createServer(options: AppOptions = {}): RunningApp {
       json(response, 200, incidentManager.detectionStatus());
       return;
     }
+    if (url.pathname === "/api/services") {
+      if (request.method !== "GET") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      json(response, 200, {
+        services: simulator.snapshot().services.map((service) => ({
+          ...service,
+          activeAlertCount: incidentManager.activeAlertsFor(service.id).length,
+          relatedIncidentCount: relatedIncidentsForService(incidentManager, service.id).length,
+        })),
+      });
+      return;
+    }
+    if (url.pathname.startsWith("/api/services/")) {
+      if (request.method !== "GET") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      const serviceId = decodeURIComponent(url.pathname.slice("/api/services/".length));
+      if (!isServiceId(serviceId)) {
+        json(response, 404, { error: "Service not found", requestId });
+        return;
+      }
+      const system = simulator.snapshot();
+      const service = system.services.find((candidate) => candidate.id === serviceId);
+      if (!service) {
+        json(response, 404, { error: "Service not found", requestId });
+        return;
+      }
+      const byId = new Map(system.services.map((candidate) => [candidate.id, candidate]));
+      const incidents = relatedIncidentsForService(incidentManager, serviceId);
+      json(response, 200, {
+        service,
+        history: simulator.history(serviceId),
+        logs: simulator.recentLogs(serviceId),
+        deployments: simulator.recentDeployments(serviceId),
+        dependencies: service.dependencies.map((dependencyId) => byId.get(dependencyId)).filter((dependency): dependency is NonNullable<typeof dependency> => dependency !== undefined),
+        dependents: system.services.filter((candidate) => candidate.dependencies.includes(serviceId)),
+        activeAlerts: incidentManager.activeAlertsFor(serviceId),
+        relatedIncidents: incidents,
+      });
+      return;
+    }
     if (url.pathname === "/api/alert-policies") {
       if (request.method === "GET") {
         json(response, 200, { policies: alertPolicies.list() });
@@ -116,7 +160,16 @@ export function createServer(options: AppOptions = {}): RunningApp {
       return;
     }
     if (url.pathname === "/api/incidents") {
-      json(response, 200, { incidents: incidentManager.list() });
+      const status = url.searchParams.get("status");
+      const severity = url.searchParams.get("severity");
+      if (!isIncidentStatus(status) || !isIncidentSeverity(severity)) {
+        json(response, 400, { error: "status and severity filters must be valid incident values", requestId });
+        return;
+      }
+      const incidents = incidentManager.list().filter((incident) =>
+        (status === null || incident.status === status) && (severity === null || incident.severity === severity),
+      );
+      json(response, 200, { incidents });
       return;
     }
     if (url.pathname.startsWith("/api/incidents/") && url.pathname.endsWith("/investigate")) {
@@ -290,7 +343,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
       return;
     }
     const asset = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-    if (asset === "index.html" || asset === "incident.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "topology.js" || asset === "investigation-view.js" || asset === "scenario-controls.js" || asset === "incident-metrics.js") {
+    if (asset === "index.html" || asset === "incident.html" || asset === "services.html" || asset === "service.html" || asset === "incidents.html" || asset === "styles.css" || asset === "app.js" || asset === "incident.js" || asset === "services.js" || asset === "service.js" || asset === "incidents.js" || asset === "topology.js" || asset === "investigation-view.js" || asset === "scenario-controls.js" || asset === "incident-metrics.js") {
       try {
         const body = await readFile(join(webRoot, asset));
         const contentType = asset.endsWith(".css") ? "text/css" : asset.endsWith(".js") ? "application/javascript" : "text/html";
@@ -342,6 +395,20 @@ function broadcast(streams: ReadonlySet<ServerResponse>, event: SimulatorEvent |
 
 function isServiceId(value: string | null): value is ServiceId {
   return value !== null && serviceIds.includes(value as ServiceId);
+}
+
+function isIncidentStatus(value: string | null): value is "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED" | null {
+  return value === null || value === "DETECTED" || value === "INVESTIGATING" || value === "MONITORING" || value === "RESOLVED";
+}
+
+function isIncidentSeverity(value: string | null): value is "SEV-1" | "SEV-2" | "SEV-3" | "SEV-4" | null {
+  return value === null || value === "SEV-1" || value === "SEV-2" || value === "SEV-3" || value === "SEV-4";
+}
+
+function relatedIncidentsForService(incidentManager: IncidentManager, serviceId: string) {
+  return incidentManager.list().filter((incident) =>
+    incident.affectedServices.includes(serviceId) || incidentManager.evidenceFor(incident.id)?.contextServiceIds.includes(serviceId),
+  );
 }
 
 async function readJson(request: AsyncIterable<unknown>): Promise<unknown> {

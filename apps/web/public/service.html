@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Service detail · AI Incident Commander</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="directory-shell service-detail-shell">
+      <header class="masthead compact-masthead">
+        <div><p class="eyebrow"><a class="back-link" href="/services.html">← Services</a> / live component context</p><h1 id="service-name">Loading service…</h1><p class="subhead" id="service-summary">Retrieving current telemetry and operational evidence.</p></div>
+        <nav class="product-nav" aria-label="Product navigation"><a href="/">Overview</a><a class="active" href="/services.html">Services</a><a href="/incidents.html">Incident History</a><a href="/#chaos-title">Simulator controls</a></nav>
+      </header>
+      <p class="load-message" id="service-error" role="alert" hidden></p>
+      <section class="service-metric-strip" id="service-metrics" aria-label="Current service metrics"></section>
+      <section class="service-detail-grid">
+        <article class="directory-panel metric-history-panel"><div class="section-heading"><div><p class="eyebrow">Live telemetry</p><h2>Latency history</h2></div><span id="service-updated" class="mono">Connecting…</span></div><div class="service-history" id="service-history" aria-label="Latency history chart"></div></article>
+        <article class="directory-panel"><div class="section-heading"><div><p class="eyebrow">Relationship map</p><h2>Dependencies</h2></div></div><div class="relationship-columns"><div><h3>Depends on</h3><ul id="dependencies" class="linked-list"></ul></div><div><h3>Used by</h3><ul id="dependents" class="linked-list"></ul></div></div></article>
+      </section>
+      <section class="service-detail-grid evidence-detail-grid">
+        <article class="directory-panel"><div class="section-heading"><div><p class="eyebrow">Operational evidence</p><h2>Recent logs</h2></div></div><ol id="service-logs" class="service-log-list"></ol></article>
+        <article class="directory-panel"><div class="section-heading"><div><p class="eyebrow">Deployment state</p><h2>Current version</h2></div></div><div id="service-deployments" class="deployment-list"></div></article>
+      </section>
+      <section class="service-detail-grid evidence-detail-grid">
+        <article class="directory-panel"><div class="section-heading"><div><p class="eyebrow">Detection</p><h2>Active alerts</h2></div></div><ol id="service-alerts" class="evidence-list"></ol></article>
+        <article class="directory-panel"><div class="section-heading"><div><p class="eyebrow">Incident records</p><h2>Related incidents</h2></div></div><ol id="related-incidents" class="evidence-list"></ol></article>
+      </section>
+    </main>
+    <script type="module" src="/service.js"></script>
+  </body>
+</html>

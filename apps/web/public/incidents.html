@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Incident History · AI Incident Commander</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="directory-shell">
+      <header class="masthead compact-masthead">
+        <div><p class="eyebrow"><span class="pulse"></span> Command center / reviewable evidence</p><h1>Incident History</h1><p class="subhead">Active response work and preserved historical investigation records.</p></div>
+        <nav class="product-nav" aria-label="Product navigation"><a href="/">Overview</a><a href="/services.html">Services</a><a class="active" href="/incidents.html">Incident History</a><a href="/#chaos-title">Simulator controls</a></nav>
+      </header>
+      <section class="history-toolbar" aria-label="Incident filters"><label>Status<select id="status-filter"><option value="">All statuses</option><option value="DETECTED">Detected</option><option value="INVESTIGATING">Investigating</option><option value="MONITORING">Monitoring</option><option value="RESOLVED">Resolved</option></select></label><label>Severity<select id="severity-filter"><option value="">All severities</option><option value="SEV-1">SEV-1</option><option value="SEV-2">SEV-2</option><option value="SEV-3">SEV-3</option><option value="SEV-4">SEV-4</option></select></label><span id="incident-count" class="mono">Loading records…</span></section>
+      <section class="directory-panel" aria-labelledby="incident-history-title"><div class="section-heading"><div><p class="eyebrow">Investigations</p><h2 id="incident-history-title">Incident records</h2></div><span id="incidents-updated" class="mono">Connecting…</span></div><div class="directory-table-wrap"><table class="directory-table incident-history-table"><thead><tr><th scope="col">Incident</th><th scope="col">Severity</th><th scope="col">Status</th><th scope="col">Affected services</th><th scope="col">Started</th><th scope="col">Resolved</th><th scope="col"><span class="sr-only">Open incident</span></th></tr></thead><tbody id="incident-history-list"><tr><td colspan="7" class="empty">Loading incident records…</td></tr></tbody></table></div></section>
+      <section id="empty-incident-history" class="empty-history" hidden><p class="eyebrow">No recorded incidents</p><h2>The system has not needed an incident response yet.</h2><p>Use the deterministic simulator to introduce a failure and watch the investigation story form.</p><a class="button" href="/#chaos-title">Open simulator controls</a></section>
+    </main>
+    <script type="module" src="/incidents.js"></script>
+  </body>
+</html>

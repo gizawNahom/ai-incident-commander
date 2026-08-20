@@ -75,6 +75,7 @@ export type SimulatorActionResult = { readonly ok: boolean; readonly message: st
 
 type Subscriber = (event: SimulatorEvent) => void;
 type SimulatorOptions = { seed: number; now: () => Date };
+const MAX_OPERATIONAL_EVENTS = 120;
 
 type ServiceBlueprint = {
   readonly id: ServiceId;
@@ -114,6 +115,7 @@ export class TelemetrySimulator {
   private latest: TelemetrySample;
   private system: SystemSnapshot;
   private readonly historyByService = new Map<ServiceId, MetricHistorySample[]>();
+  private readonly operationalEvents: (DeploymentEvent | LogEvent)[] = [];
 
   constructor(options: SimulatorOptions) {
     this.options = options;
@@ -138,6 +140,14 @@ export class TelemetrySimulator {
 
   history(serviceId: ServiceId): MetricHistory {
     return { serviceId, samples: [...(this.historyByService.get(serviceId) ?? [])] };
+  }
+
+  recentLogs(serviceId: ServiceId): readonly LogEvent[] {
+    return this.operationalEvents.filter((event): event is LogEvent => event.type === "log" && event.serviceId === serviceId);
+  }
+
+  recentDeployments(serviceId: ServiceId): readonly DeploymentEvent[] {
+    return this.operationalEvents.filter((event): event is DeploymentEvent => event.type === "deployment" && event.serviceId === serviceId);
   }
 
   triggerBadPaymentDeployment(): void {
@@ -394,6 +404,10 @@ export class TelemetrySimulator {
   }
 
   private emit(event: SimulatorEvent): void {
+    if (event.type === "log" || event.type === "deployment") {
+      this.operationalEvents.push(event);
+      if (this.operationalEvents.length > MAX_OPERATIONAL_EVENTS) this.operationalEvents.shift();
+    }
     for (const subscriber of this.subscribers) subscriber(event);
   }
 

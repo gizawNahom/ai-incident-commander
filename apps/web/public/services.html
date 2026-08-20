@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Services · AI Incident Commander</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="directory-shell">
+      <header class="masthead compact-masthead">
+        <div>
+          <p class="eyebrow"><span class="pulse"></span> Command center / live simulation</p>
+          <h1>Services</h1>
+          <p class="subhead">Live condition and operational context for every monitored component.</p>
+        </div>
+        <nav class="product-nav" aria-label="Product navigation"><a href="/">Overview</a><a class="active" href="/services.html">Services</a><a href="/incidents.html">Incident History</a><a href="/#chaos-title">Simulator controls</a></nav>
+      </header>
+
+      <section class="directory-status" aria-live="polite"><span id="service-count">Loading services…</span><span id="services-updated">Connecting to live updates…</span></section>
+      <section class="directory-panel" aria-labelledby="service-list-title">
+        <div class="section-heading"><div><p class="eyebrow">System inventory</p><h2 id="service-list-title">Monitored services</h2></div><span class="legend"><i class="healthy-dot"></i> Healthy <i class="degraded-dot"></i> Degraded <i class="critical-dot"></i> Critical</span></div>
+        <div class="directory-table-wrap"><table class="directory-table"><thead><tr><th scope="col">Service</th><th scope="col">Status</th><th scope="col">Latency</th><th scope="col">Error rate</th><th scope="col">Traffic</th><th scope="col">Alerts</th><th scope="col">Incidents</th><th scope="col"><span class="sr-only">Open detail</span></th></tr></thead><tbody id="service-list"><tr><td colspan="8" class="empty">Loading service inventory…</td></tr></tbody></table></div>
+      </section>
+    </main>
+    <script type="module" src="/services.js"></script>
+  </body>
+</html>

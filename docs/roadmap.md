@@ -28,12 +28,15 @@ the specification.
    Only approval by the demo Engineer invokes the validated simulator rollback;
    the Incident Room records the action’s version change, decision, outcome,
    and timeline audit events.
-6. **Run Demo Incident and browser coverage — next.** Add the deterministic
+6. **Services and Incident History — completed.** The application now exposes
+   live service inventory/detail views and reviewable active/resolved incident
+   records backed by simulator and preserved evidence read models.
+7. **Run Demo Incident and browser coverage — next.** Add the deterministic
    one-click recruiter flow and Playwright coverage for the flagship browser
    journey.
-7. **Simple Engineer/Admin identity.** Add credible lightweight RBAC before
+8. **Simple Engineer/Admin identity.** Add credible lightweight RBAC before
    expanding the set of operational mitigations.
-8. **PostgreSQL persistence.** Add durable storage only after the preceding
+9. **PostgreSQL persistence.** Add durable storage only after the preceding
    product model and workflow have been validated.
 
 ## Simulator boundary note

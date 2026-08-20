@@ -47,7 +47,7 @@ export type IncidentTimelineEvent = {
 export type DetectedIncident = {
   readonly id: string;
   readonly title: string;
-  readonly severity: "SEV-1";
+  readonly severity: AlertPolicy["severity"];
   readonly status: "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED";
   readonly startedAt: string;
   readonly resolvedAt?: string;
@@ -197,6 +197,10 @@ export class IncidentManager {
       message: "Active alerts are waiting for a correlated alert from a distinct detection policy on a connected service.",
       activeAlerts,
     };
+  }
+
+  activeAlertsFor(serviceId: string): readonly Alert[] {
+    return [...this.activeAlerts.values()].filter((alert) => alert.serviceId === serviceId);
   }
 
   recordInvestigation(input: { readonly incidentId: string; readonly timestamp: string; readonly hypothesis: string; readonly suggestedAction?: string | SuggestedActionRecommendation }): void {
@@ -407,7 +411,7 @@ export class IncidentManager {
     const incident: DetectedIncident = {
       id: incidentId,
       title,
-      severity: "SEV-1",
+      severity: highestSeverity(pair),
       status: "DETECTED",
       startedAt: system.timestamp,
       affectedServices: alertServices,
@@ -570,6 +574,11 @@ function alertKey(alert: Pick<Alert, "policyId" | "serviceId">): string {
 
 function pairCorrelationKey(pair: readonly [Alert, Alert]): string {
   return pair.map(alertKey).sort().join("|");
+}
+
+function highestSeverity(alerts: readonly Alert[]): AlertPolicy["severity"] {
+  const rank: Record<AlertPolicy["severity"], number> = { "SEV-1": 1, "SEV-2": 2, "SEV-3": 3, "SEV-4": 4 };
+  return alerts.reduce<AlertPolicy["severity"]>((highest, alert) => rank[alert.severity] < rank[highest] ? alert.severity : highest, "SEV-4");
 }
 
 function areConnected(services: readonly ObservedService[], from: string, to: string): boolean {

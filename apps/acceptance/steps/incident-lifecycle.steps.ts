@@ -7,7 +7,11 @@ import { createServer } from "../../api/src/server.ts";
 type Application = ReturnType<typeof createServer>;
 type Incident = {
   readonly id: string;
+  readonly title: string;
+  readonly severity: "SEV-1" | "SEV-2" | "SEV-3" | "SEV-4";
   readonly status: "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED";
+  readonly startedAt: string;
+  readonly resolvedAt?: string;
   readonly affectedServices: readonly string[];
   readonly timeline: readonly { readonly type: string; readonly message: string }[];
   readonly actions: readonly SuggestedAction[];
@@ -27,6 +31,22 @@ type IncidentEvidence = {
   readonly metricHistories: readonly { readonly serviceId: string; readonly samples: readonly { readonly latencyMs?: number }[] }[];
 };
 type System = { readonly services: readonly { readonly health: string }[] };
+type ServiceListItem = {
+  readonly id: string;
+  readonly health: string;
+  readonly metrics: { readonly latencyMs: number; readonly errorRate: number; readonly trafficRpm: number };
+  readonly activeAlertCount: number;
+};
+type ServiceDetail = {
+  readonly service: ServiceListItem & { readonly version: string };
+  readonly history: { readonly samples: readonly { readonly latencyMs: number }[] };
+  readonly logs: readonly { readonly serviceId: string; readonly message: string }[];
+  readonly deployments: readonly { readonly serviceId: string; readonly version: string }[];
+  readonly dependencies: readonly { readonly id: string }[];
+  readonly dependents: readonly { readonly id: string }[];
+  readonly activeAlerts: readonly { readonly serviceId: string }[];
+  readonly relatedIncidents: readonly Incident[];
+};
 
 class IncidentWorld {
   app: Application | undefined;
@@ -36,6 +56,11 @@ class IncidentWorld {
   separateIncident: Incident | undefined;
   actionId: string | undefined;
   lastResponseStatus: number | undefined;
+  services: readonly ServiceListItem[] = [];
+  serviceDetail: ServiceDetail | undefined;
+  incidentHistory: readonly Incident[] = [];
+  activeIncidentId: string | undefined;
+  resolvedIncidentId: string | undefined;
 }
 
 setWorldConstructor(IncidentWorld);
@@ -230,10 +255,231 @@ Then("the rollback remains proposed", async function (this: IncidentWorld) {
   assert.equal(action?.status, "PROPOSED");
 });
 
+Given("the simulated system is healthy", async function (this: IncidentWorld) {
+  const system = await getJson<System>(this, "/api/system");
+  assert.ok(system.services.every((service) => service.health === "healthy"));
+});
+
+When("the engineer opens the Services screen", async function (this: IncidentWorld) {
+  const response = await fetch(`${address(this)}/services.html`);
+  assert.equal(response.status, 200);
+  this.services = (await getJson<{ readonly services: readonly ServiceListItem[] }>(this, "/api/services")).services;
+});
+
+Then("they see every monitored service", function (this: IncidentWorld) {
+  assert.equal(this.services.length, 9);
+});
+
+Then("each service shows its current health, latency, error rate, traffic, and active-alert count", function (this: IncidentWorld) {
+  assert.ok(this.services.every((service) => typeof service.health === "string" && Number.isFinite(service.metrics.latencyMs) && Number.isFinite(service.metrics.errorRate) && Number.isFinite(service.metrics.trafficRpm) && Number.isInteger(service.activeAlertCount)));
+});
+
+Then("each service links to its service detail", async function (this: IncidentWorld) {
+  for (const service of this.services) {
+    const response = await fetch(`${address(this)}/service.html?id=${encodeURIComponent(service.id)}`);
+    assert.equal(response.status, 200);
+  }
+});
+
+Given("the {string} service is affected by the {string} scenario", async function (this: IncidentWorld, serviceId: string, scenario: string) {
+  if (scenario === "bad deployment") await post(this, "/api/simulator/bad-payment-deployment");
+  else if (scenario === "Redis degradation") await post(this, "/api/simulator/redis-degradation");
+  else if (scenario === "Kafka backlog") await post(this, "/api/simulator/kafka-backlog");
+  else if (scenario === "service outage") await postJson(this, "/api/simulator/service-outage", { serviceId });
+  else throw new Error(`Unsupported simulator scenario: ${scenario}`);
+  advance(this, 3);
+  const service = (await getJson<{ readonly services: readonly { readonly id: string; readonly health: string }[] }>(this, "/api/system")).services.find((candidate) => candidate.id === serviceId);
+  assert.ok(service && service.health !== "healthy", `Expected ${serviceId} to be affected by ${scenario}`);
+});
+
+When("the engineer opens the service detail for {string}", async function (this: IncidentWorld, serviceId: string) {
+  const page = await fetch(`${address(this)}/service.html?id=${encodeURIComponent(serviceId)}`);
+  assert.equal(page.status, 200);
+  this.serviceDetail = await getJson<ServiceDetail>(this, `/api/services/${encodeURIComponent(serviceId)}`);
+});
+
+Then("they see the current metrics for {string}", function (this: IncidentWorld, serviceId: string) {
+  assert.equal(this.serviceDetail?.service.id, serviceId);
+  assert.ok((this.serviceDetail?.history.samples.length ?? 0) > 0);
+  assert.ok(Number.isFinite(this.serviceDetail?.service.metrics.latencyMs));
+});
+
+Then("they see recent logs for {string}", function (this: IncidentWorld, serviceId: string) {
+  assert.ok(this.serviceDetail?.logs.some((log) => log.serviceId === serviceId));
+});
+
+Then("they see the current deployment for {string}", function (this: IncidentWorld, serviceId: string) {
+  assert.equal(this.serviceDetail?.service.id, serviceId);
+  assert.match(this.serviceDetail?.service.version ?? "", /\S/);
+});
+
+Then("they see dependencies and dependent services for {string}", function (this: IncidentWorld, serviceId: string) {
+  assert.equal(this.serviceDetail?.service.id, serviceId);
+  assert.ok((this.serviceDetail?.dependencies.length ?? 0) + (this.serviceDetail?.dependents.length ?? 0) > 0);
+});
+
+Then("they see active alerts affecting {string}", function (this: IncidentWorld, serviceId: string) {
+  assert.ok(this.serviceDetail?.activeAlerts.some((alert) => alert.serviceId === serviceId));
+});
+
+Then("they can open related incidents for {string}", async function (this: IncidentWorld, serviceId: string) {
+  const incident = this.serviceDetail?.relatedIncidents[0];
+  assert.ok(incident, `Expected a related incident for ${serviceId}`);
+  const response = await fetch(`${address(this)}/incident.html?id=${encodeURIComponent(incident.id)}`);
+  assert.equal(response.status, 200);
+});
+
+Given("{string} was affected by a bad deployment", async function (this: IncidentWorld, serviceId: string) {
+  assert.equal(serviceId, "payment-service");
+  await createPaymentIncident(this);
+});
+
+Given("the system has recovered", async function (this: IncidentWorld) {
+  await post(this, "/api/simulator/recover");
+  advance(this, 6);
+});
+
+Then("they see the current healthy service state", function (this: IncidentWorld) {
+  assert.equal(this.serviceDetail?.service.health, "healthy");
+});
+
+Then("they can open the related historical incident record", async function (this: IncidentWorld) {
+  const incident = this.serviceDetail?.relatedIncidents[0];
+  assert.ok(incident);
+  const evidence = await getJson<IncidentEvidence>(this, `/api/incidents/${encodeURIComponent(incident.id)}/evidence`);
+  assert.ok(evidence.metricHistories.some((history) => history.samples.some((sample) => (sample.latencyMs ?? 0) > 1_000)));
+});
+
+Given("one incident is active", async function (this: IncidentWorld) {
+  await createKafkaIncident(this);
+  this.activeIncidentId = this.incidentId;
+});
+
+Given("one earlier incident has been resolved", async function (this: IncidentWorld) {
+  await createAndResolvePaymentIncident(this);
+  this.resolvedIncidentId = this.incidentId;
+  await createKafkaIncident(this);
+  this.activeIncidentId = this.incidentId;
+});
+
+Given("there is an active incident", async function (this: IncidentWorld) {
+  await createKafkaIncident(this);
+  this.activeIncidentId = this.incidentId;
+});
+
+Given("there is a resolved incident", async function (this: IncidentWorld) {
+  await createAndResolvePaymentIncident(this);
+  this.resolvedIncidentId = this.incidentId;
+  await createKafkaIncident(this);
+  this.activeIncidentId = this.incidentId;
+});
+
+When("the engineer opens Incident History", async function (this: IncidentWorld) {
+  const page = await fetch(`${address(this)}/incidents.html`);
+  assert.equal(page.status, 200);
+  this.incidentHistory = (await getJson<{ readonly incidents: readonly Incident[] }>(this, "/api/incidents")).incidents;
+});
+
+Then("they see both incidents", function (this: IncidentWorld) {
+  assert.ok(this.incidentHistory.some((incident) => incident.id === this.activeIncidentId));
+  assert.ok(this.incidentHistory.some((incident) => incident.id === this.resolvedIncidentId));
+});
+
+Then("each incident shows its identifier, title, severity, status, affected services, and start time", function (this: IncidentWorld) {
+  assert.ok(this.incidentHistory.every((incident) => /^INC-/.test(incident.id) && incident.title.length > 0 && incident.severity.startsWith("SEV-") && incident.status.length > 0 && incident.affectedServices.length > 0 && Number.isFinite(Date.parse(incident.startedAt))));
+});
+
+Then("the resolved incident also shows its resolution time", function (this: IncidentWorld) {
+  const resolved = this.incidentHistory.find((incident) => incident.id === this.resolvedIncidentId);
+  assert.ok(resolved?.resolvedAt && Number.isFinite(Date.parse(resolved.resolvedAt)));
+});
+
+When("the engineer filters Incident History to {string}", async function (this: IncidentWorld, filter: string) {
+  const query = filter === "Resolved" ? "status=RESOLVED" : `severity=${encodeURIComponent(filter)}`;
+  this.incidentHistory = (await getJson<{ readonly incidents: readonly Incident[] }>(this, `/api/incidents?${query}`)).incidents;
+});
+
+Then("they see the resolved incident", function (this: IncidentWorld) {
+  assert.ok(this.incidentHistory.some((incident) => incident.id === this.resolvedIncidentId));
+});
+
+Then("they do not see the active incident", function (this: IncidentWorld) {
+  assert.equal(this.incidentHistory.some((incident) => incident.id === this.activeIncidentId), false);
+});
+
+Given("there are incidents of different severities", async function (this: IncidentWorld) {
+  await createAndResolvePaymentIncident(this);
+  this.resolvedIncidentId = this.incidentId;
+  await setPolicySeverity(this, "SEV-2");
+  await createKafkaIncident(this);
+  this.activeIncidentId = this.incidentId;
+  const incidents = await getIncidents(this);
+  assert.equal(incidents.find((incident) => incident.id === this.resolvedIncidentId)?.severity, "SEV-1");
+  assert.equal(incidents.find((incident) => incident.id === this.activeIncidentId)?.severity, "SEV-2");
+});
+
+Then("they see only SEV-1 incidents", function (this: IncidentWorld) {
+  assert.ok(this.incidentHistory.length > 0);
+  assert.ok(this.incidentHistory.every((incident) => incident.severity === "SEV-1"));
+});
+
+Given("a {string} deployment incident has been resolved", async function (this: IncidentWorld, serviceId: string) {
+  assert.equal(serviceId, "payment-service");
+  await createPaymentIncident(this);
+  await post(this, `/api/incidents/${incidentId(this)}/investigate`);
+  const action = (await getIncident(this)).actions[0];
+  assert.ok(action);
+  await post(this, `/api/incidents/${incidentId(this)}/actions/${encodeURIComponent(action.id)}/approve`);
+  advance(this, 6);
+  await post(this, `/api/incidents/${incidentId(this)}/resolve`);
+  this.resolvedIncidentId = this.incidentId;
+});
+
+When("the engineer opens that incident from Incident History", async function (this: IncidentWorld) {
+  const page = await fetch(`${address(this)}/incidents.html`);
+  assert.equal(page.status, 200);
+  this.observedIncident = await getJson<Incident>(this, `/api/incidents/${encodeURIComponent(this.resolvedIncidentId ?? "")}`);
+});
+
+Then("they see its preserved timeline", function (this: IncidentWorld) {
+  assert.ok((this.observedIncident?.timeline.length ?? 0) > 0);
+});
+
+Then("they see the deployment and alert evidence captured during the incident", async function (this: IncidentWorld) {
+  const evidence = await getEvidenceFor(this, this.resolvedIncidentId);
+  assert.ok(evidence.deployments.length > 0);
+  assert.ok(evidence.alerts.length > 0);
+});
+
+Then("they see the incident-scoped metrics and logs", async function (this: IncidentWorld) {
+  const evidence = await getEvidenceFor(this, this.resolvedIncidentId);
+  assert.ok(evidence.metricHistories.length > 0);
+  assert.ok(evidence.logs.length > 0);
+});
+
+Then("they see the final mitigation and resolution events", function (this: IncidentWorld) {
+  assert.ok(this.observedIncident?.timeline.some((event) => event.type === "ACTION_COMPLETED"));
+  assert.ok(this.observedIncident?.timeline.some((event) => event.type === "INCIDENT_RESOLVED"));
+});
+
+Given("no incidents have been created", function (this: IncidentWorld) {
+  this.incidentHistory = [];
+});
+
+Then("they see an explanation that no incidents have been recorded", function (this: IncidentWorld) {
+  assert.equal(this.incidentHistory.length, 0);
+});
+
+Then("they see a link to the simulator controls", async function (this: IncidentWorld) {
+  const page = await fetch(`${address(this)}/incidents.html`);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Simulator controls/);
+});
+
 async function createPaymentIncident(world: IncidentWorld): Promise<void> {
   await post(world, "/api/simulator/bad-payment-deployment");
   advance(world, 3);
-  const [incident] = await getIncidents(world);
+  const incident = (await getIncidents(world)).find((candidate) => candidate.status !== "RESOLVED" && candidate.affectedServices.includes("payment-service"));
   assert.ok(incident, "Expected a payment incident to be created");
   world.incidentId = incident.id;
 }
@@ -260,6 +506,38 @@ async function getIncident(world: IncidentWorld): Promise<Incident> {
 
 async function getEvidence(world: IncidentWorld): Promise<IncidentEvidence> {
   return getJson<IncidentEvidence>(world, `/api/incidents/${incidentId(world)}/evidence`);
+}
+
+async function getEvidenceFor(world: IncidentWorld, targetIncidentId: string | undefined): Promise<IncidentEvidence & { readonly alerts: readonly unknown[]; readonly logs: readonly unknown[] }> {
+  if (!targetIncidentId) throw new Error("Expected an incident identifier");
+  return getJson<IncidentEvidence & { readonly alerts: readonly unknown[]; readonly logs: readonly unknown[] }>(world, `/api/incidents/${encodeURIComponent(targetIncidentId)}/evidence`);
+}
+
+async function createKafkaIncident(world: IncidentWorld): Promise<void> {
+  await post(world, "/api/simulator/kafka-backlog");
+  advance(world, 3);
+  const incident = (await getIncidents(world)).find((candidate) => candidate.status !== "RESOLVED" && candidate.affectedServices.includes("kafka"));
+  assert.ok(incident, "Expected a Kafka incident to be created");
+  world.incidentId = incident.id;
+}
+
+async function createAndResolvePaymentIncident(world: IncidentWorld): Promise<void> {
+  await createPaymentIncident(world);
+  await post(world, "/api/simulator/recover");
+  advance(world, 6);
+  await post(world, `/api/incidents/${incidentId(world)}/resolve`);
+}
+
+async function setPolicySeverity(world: IncidentWorld, severity: "SEV-1" | "SEV-2"): Promise<void> {
+  const policies = (await getJson<{ readonly policies: readonly { readonly id: string; readonly name: string; readonly metric: string; readonly comparator: string; readonly threshold: number; readonly breachDurationSeconds: number; readonly enabled: boolean; readonly scope: unknown }[] }>(world, "/api/alert-policies")).policies;
+  for (const policy of policies) {
+    const response = await fetch(`${address(world)}/api/alert-policies/${encodeURIComponent(policy.id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...policy, severity }),
+    });
+    assert.equal(response.status, 200);
+  }
 }
 
 async function getJson<T>(world: IncidentWorld, path: string): Promise<T> {

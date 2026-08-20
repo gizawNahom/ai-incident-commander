@@ -55,7 +55,13 @@ test("a bad payment deployment produces explainable degradation across the depen
   assert.equal(redis?.health, "degraded");
   assert.ok((payment?.metrics.latencyMs ?? 0) > 1_000);
   assert.ok((checkout?.metrics.errorRate ?? 0) > 10);
-  assert.ok(events.some((event) => event.type === "deployment" && event.version === "v1.8.3"));
+  const deployment = events.find((event) => event.type === "deployment");
+  assert.equal(deployment?.type, "deployment");
+  if (deployment?.type === "deployment") {
+    assert.equal(deployment.version, "v1.8.3");
+    assert.equal(deployment.previousVersion, "v1.8.2");
+    assert.equal(deployment.deploymentKind, "RELEASE");
+  }
   assert.ok(events.some((event) => event.type === "log" && event.serviceId === "payment-service" && event.message.includes("connection pool")));
 });
 
@@ -153,6 +159,23 @@ test("recovering the system restores healthy versions and service health", () =>
   assert.equal(payment?.version, "v1.8.2");
   assert.equal(payment?.health, "healthy");
   assert.equal(checkout?.health, "healthy");
+});
+
+test("a rollback command validates its target and starts recovery only for the matching defective deployment", () => {
+  const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date("2026-08-13T12:00:00.000Z") });
+  simulator.triggerBadPaymentDeployment();
+  simulator.advance();
+  simulator.advance();
+  simulator.advance();
+
+  const rejected = simulator.rollbackDeployment({ serviceId: "checkout-service", fromVersion: "v4.2.0", toVersion: "v4.1.9" });
+  assert.equal(rejected.ok, false);
+  assert.equal(simulator.snapshot().scenario, "bad-payment-deployment");
+
+  const accepted = simulator.rollbackDeployment({ serviceId: "payment-service", fromVersion: "v1.8.3", toVersion: "v1.8.2" });
+  assert.equal(accepted.ok, true);
+  assert.equal(simulator.snapshot().scenario, "recovering");
+  assert.equal(simulator.snapshot().services.find((service) => service.id === "payment-service")?.version, "v1.8.2");
 });
 
 test("simulator retains bounded metric history for incident investigation", () => {

@@ -15,7 +15,7 @@ const context: InvestigationContext = {
       { id: "ALR-2", serviceId: "storefront", title: "Storefront error rate above 10%", threshold: 10, observedValue: 18, unit: "%", triggeredAt: "2026-08-14T12:00:20.000Z" },
     ],
     timeline: [
-      { type: "DEPLOYMENT", timestamp: "2026-08-14T12:00:00.000Z", serviceId: "orders-worker", message: "orders-worker v9.0.0 deployment completed" },
+      { type: "DEPLOYMENT", timestamp: "2026-08-14T12:00:00.000Z", serviceId: "orders-worker", version: "v9.0.0", previousVersion: "v8.9.3", message: "orders-worker v9.0.0 deployment completed" },
       { type: "LOG", timestamp: "2026-08-14T12:00:12.000Z", serviceId: "orders-worker", message: "connection pool timeout while processing order" },
     ],
   },
@@ -56,6 +56,8 @@ test("accepts Gemini output only when citations and a rollback target are ground
   assert.ok(requestEvidenceIds.includes("evidence-deployment"));
   assert.equal(analysis.hypotheses[0].targetServiceId, "orders-worker");
   assert.equal(analysis.suggestedAction?.targetServiceId, "orders-worker");
+  assert.equal(analysis.suggestedAction?.fromVersion, "v9.0.0");
+  assert.equal(analysis.suggestedAction?.toVersion, "v8.9.3");
 });
 
 test("rejects Gemini output that cites evidence absent from the catalog", async () => {

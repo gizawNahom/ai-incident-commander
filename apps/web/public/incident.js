@@ -29,6 +29,7 @@ const elements = {
 let incident;
 let system;
 let evidence;
+let analysis;
 
 function format(value) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
@@ -65,6 +66,7 @@ function renderIncident(nextIncident) {
   elements.metrics.hidden = false;
   elements.evidence.hidden = false;
   elements.investigator.hidden = false;
+  if (analysis) renderInvestigation(analysis);
 }
 
 function element(tag, className, content) {
@@ -74,8 +76,8 @@ function element(tag, className, content) {
   return node;
 }
 
-function renderInvestigation(analysis) {
-  const view = buildInvestigationView(analysis);
+function renderInvestigation(nextAnalysis) {
+  const view = buildInvestigationView(nextAnalysis, incident?.actions ?? []);
   const source = element("span", "analysis-source", view.sourceLabel);
   const summary = element("p", "investigation-summary", view.summary);
   const hypothesis = element("article", "hypothesis-card");
@@ -91,12 +93,57 @@ function renderInvestigation(analysis) {
     action.append(
       element("span", "", view.action.status),
       element("strong", "", view.action.label),
+      element("span", "action-version-change", view.action.versionChange),
       element("p", "", view.action.rationale),
       element("small", "", view.action.risk),
     );
+    if (view.action.decisionReason) action.append(element("p", "action-outcome", `Decision reason: ${view.action.decisionReason}`));
+    if (view.action.outcome) action.append(element("p", "action-outcome", view.action.outcome));
+    if (view.action.canDecide) action.append(renderActionControls(view.action));
     elements.investigationResult.append(action);
   }
   elements.investigationResult.hidden = false;
+}
+
+function renderActionControls(action) {
+  const controls = element("div", "action-decision-controls");
+  const reason = document.createElement("input");
+  reason.type = "text";
+  reason.placeholder = "Reason required to reject";
+  reason.setAttribute("aria-label", "Reason for rejecting rollback");
+  const approve = element("button", "button action-approve", "Approve rollback");
+  approve.type = "button";
+  approve.addEventListener("click", () => decideAction(action.id, "approve", undefined, controls));
+  const reject = element("button", "button secondary action-reject", "Reject");
+  reject.type = "button";
+  reject.addEventListener("click", () => {
+    const decisionReason = reason.value.trim();
+    if (!decisionReason) {
+      reason.focus();
+      showError("A rejection reason is required.");
+      return;
+    }
+    decideAction(action.id, "reject", decisionReason, controls);
+  });
+  controls.append(approve, reason, reject);
+  return controls;
+}
+
+async function decideAction(actionId, operation, reason, controls) {
+  for (const button of controls.querySelectorAll("button")) button.disabled = true;
+  try {
+    const response = await fetch(`/api/incidents/${encodeURIComponent(incident.id)}/actions/${encodeURIComponent(actionId)}/${operation}`, {
+      method: "POST",
+      ...(reason ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) } : {}),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error ?? "Unable to update mitigation");
+    renderIncident(payload);
+    await refreshEvidence();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Unable to update mitigation.");
+    for (const button of controls.querySelectorAll("button")) button.disabled = false;
+  }
 }
 
 function renderTimeline() {
@@ -251,7 +298,7 @@ elements.investigateButton.addEventListener("click", async () => {
   try {
     const response = await fetch(`/api/incidents/${encodeURIComponent(incident.id)}/investigate`, { method: "POST" });
     if (!response.ok) throw new Error("Unable to analyze incident evidence");
-    renderInvestigation(await response.json());
+    analysis = await response.json();
     renderIncident(await getJson(`/api/incidents/${encodeURIComponent(incident.id)}`));
   } catch (error) {
     showError(error instanceof Error ? error.message : "Unable to analyze incident evidence.");

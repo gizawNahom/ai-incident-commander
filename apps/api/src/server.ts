@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
-import { IncidentManager, IncidentResolutionError, type IncidentEvent } from "./incident-manager.ts";
+import { IncidentActionError, IncidentManager, IncidentResolutionError, type IncidentEvent } from "./incident-manager.ts";
 import { AlertPolicyNotFoundError, AlertPolicyStore, AlertPolicyValidationError } from "./alert-policy-store.ts";
 import { DeterministicInvestigator, type IncidentInvestigator, type Investigation } from "../../../packages/ai/src/deterministic-investigator.ts";
 import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
@@ -151,7 +151,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
         incidentId,
         timestamp: simulator.snapshot().timestamp,
         hypothesis: analysis.hypotheses[0]?.inference ?? "No hypothesis could be generated from the available evidence.",
-        suggestedAction: analysis.suggestedAction ? `Rollback ${analysis.suggestedAction.targetServiceId} proposed` : undefined,
+        suggestedAction: analysis.suggestedAction,
       });
       json(response, 200, analysis);
       return;
@@ -178,6 +178,45 @@ export function createServer(options: AppOptions = {}): RunningApp {
       } catch (error) {
         const status = error instanceof IncidentResolutionError && error.message === "Incident not found" ? 404 : 409;
         json(response, status, { error: error instanceof Error ? error.message : "Unable to resolve incident", requestId });
+      }
+      return;
+    }
+    const actionRoute = incidentActionRoute(url.pathname);
+    if (actionRoute) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      if (actionRoute.operation === "execute") {
+        json(response, 409, { error: "Suggested actions execute only through explicit approval", requestId });
+        return;
+      }
+      const timestamp = simulator.snapshot().timestamp;
+      try {
+        if (actionRoute.operation === "reject") {
+          const reason = actionRejectionReason(await readJson(request));
+          incidentManager.rejectAction(actionRoute.incidentId, actionRoute.actionId, timestamp, "Engineer (demo)", reason);
+        } else {
+          const approved = incidentManager.approveAction(actionRoute.incidentId, actionRoute.actionId, timestamp, "Engineer (demo)");
+          const executing = incidentManager.beginActionExecution(actionRoute.incidentId, approved.id, timestamp);
+          const result = simulator.rollbackDeployment({
+            serviceId: executing.targetServiceId as ServiceId,
+            fromVersion: executing.fromVersion,
+            toVersion: executing.toVersion,
+          });
+          if (result.ok) {
+            incidentManager.completeAction(actionRoute.incidentId, executing.id, timestamp, result.message);
+          } else {
+            incidentManager.failAction(actionRoute.incidentId, executing.id, timestamp, result.message);
+          }
+        }
+        const incident = incidentManager.find(actionRoute.incidentId);
+        if (!incident) throw new IncidentActionError("Incident not found");
+        json(response, 200, incident);
+      } catch (error) {
+        const message = actionErrorMessage(error);
+        const status = message.includes("not found") ? 404 : 409;
+        json(response, status, { error: message, requestId });
       }
       return;
     }
@@ -339,8 +378,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isInvestigationTimelineEvent(event: { readonly type: string }): event is { readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED"; readonly timestamp: string; readonly message: string; readonly serviceId?: string } {
+function isInvestigationTimelineEvent(event: { readonly type: string }): event is { readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED"; readonly timestamp: string; readonly message: string; readonly serviceId?: string; readonly version?: string; readonly previousVersion?: string; readonly deploymentKind?: "RELEASE" | "ROLLBACK" } {
   return event.type === "DEPLOYMENT" || event.type === "LOG" || event.type === "ALERT_TRIGGERED" || event.type === "INCIDENT_CREATED";
+}
+
+function incidentActionRoute(pathname: string): { readonly incidentId: string; readonly actionId: string; readonly operation: "approve" | "reject" | "execute" } | undefined {
+  const match = /^\/api\/incidents\/([^/]+)\/actions\/([^/]+)\/(approve|reject|execute)$/.exec(pathname);
+  if (!match) return undefined;
+  try {
+    return { incidentId: decodeURIComponent(match[1] ?? ""), actionId: decodeURIComponent(match[2] ?? ""), operation: match[3] as "approve" | "reject" | "execute" };
+  } catch {
+    return undefined;
+  }
+}
+
+function actionRejectionReason(value: unknown): string {
+  if (!isRecord(value) || typeof value.reason !== "string" || value.reason.trim().length === 0) throw new IncidentActionError("A non-empty rejection reason is required");
+  return value.reason.trim();
+}
+
+function actionErrorMessage(error: unknown): string {
+  return error instanceof IncidentActionError ? error.message : "Unable to update suggested action";
 }
 
 if (process.argv[1]?.endsWith("server.ts")) {

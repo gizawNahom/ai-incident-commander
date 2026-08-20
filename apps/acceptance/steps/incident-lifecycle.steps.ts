@@ -10,6 +10,17 @@ type Incident = {
   readonly status: "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED";
   readonly affectedServices: readonly string[];
   readonly timeline: readonly { readonly type: string; readonly message: string }[];
+  readonly actions: readonly SuggestedAction[];
+};
+type SuggestedAction = {
+  readonly id: string;
+  readonly type: "ROLLBACK_DEPLOYMENT";
+  readonly targetServiceId: string;
+  readonly fromVersion: string;
+  readonly toVersion: string;
+  readonly status: "PROPOSED" | "APPROVED" | "REJECTED" | "EXECUTING" | "COMPLETED" | "FAILED";
+  readonly actor?: string;
+  readonly decisionReason?: string;
 };
 type IncidentEvidence = {
   readonly deployments: readonly { readonly message: string }[];
@@ -23,6 +34,8 @@ class IncidentWorld {
   incidentId: string | undefined;
   observedIncident: Incident | undefined;
   separateIncident: Incident | undefined;
+  actionId: string | undefined;
+  lastResponseStatus: number | undefined;
 }
 
 setWorldConstructor(IncidentWorld);
@@ -134,6 +147,89 @@ Then("the payment incident remains monitoring recovery", async function (this: I
   assert.equal((await getIncident(this)).status, "MONITORING");
 });
 
+Given("a deployment incident has a proposed rollback for {string} from {string} to {string}", async function (this: IncidentWorld, serviceId: string, fromVersion: string, toVersion: string) {
+  assert.equal(serviceId, "payment-service", "The seeded demo currently supplies the payment deployment example");
+  assert.equal(fromVersion, "v1.8.3");
+  assert.equal(toVersion, "v1.8.2");
+  await createPaymentIncident(this);
+  const analysis = await post<{ readonly suggestedAction?: { readonly targetServiceId: string } }>(this, `/api/incidents/${incidentId(this)}/investigate`);
+  assert.equal(analysis.suggestedAction?.targetServiceId, serviceId);
+  const incident = await getIncident(this);
+  const action = incident.actions.find((candidate) => candidate.targetServiceId === serviceId && candidate.fromVersion === fromVersion && candidate.toVersion === toVersion);
+  assert.ok(action, "Expected the proposed rollback to be retained on the incident");
+  assert.equal(action.status, "PROPOSED");
+  this.actionId = action.id;
+});
+
+When(/^Engineer \(demo\) approves the rollback$/, async function (this: IncidentWorld) {
+  this.observedIncident = await post<Incident>(this, `/api/incidents/${incidentId(this)}/actions/${actionId(this)}/approve`);
+});
+
+Then("{string} is rolled back to version {string}", async function (this: IncidentWorld, serviceId: string, version: string) {
+  const system = await getJson<{ readonly services: readonly { readonly id: string; readonly version: string }[] }>(this, "/api/system");
+  assert.equal(system.services.find((service) => service.id === serviceId)?.version, version);
+});
+
+Then("{string} remains on version {string}", async function (this: IncidentWorld, serviceId: string, version: string) {
+  const system = await getJson<{ readonly services: readonly { readonly id: string; readonly version: string }[] }>(this, "/api/system");
+  assert.equal(system.services.find((service) => service.id === serviceId)?.version, version);
+});
+
+Then("the rollback is completed and audited for {string}", async function (this: IncidentWorld, serviceId: string) {
+  const incident = this.observedIncident ?? await getIncident(this);
+  const action = incident.actions.find((candidate) => candidate.id === actionId(this));
+  assert.equal(action?.status, "COMPLETED");
+  assert.equal(action?.actor, "Engineer (demo)");
+  assert.ok(incident.timeline.some((event) => event.type === "ACTION_APPROVED" && event.message.includes(serviceId)));
+  assert.ok(incident.timeline.some((event) => event.type === "ACTION_EXECUTED" && event.message.includes(serviceId)));
+  assert.ok(incident.timeline.some((event) => event.type === "ACTION_COMPLETED" && event.message.includes(serviceId)));
+});
+
+When(/^Engineer \(demo\) rejects the rollback because "([^"]+)"$/, async function (this: IncidentWorld, reason: string) {
+  this.observedIncident = await postJson<Incident>(this, `/api/incidents/${incidentId(this)}/actions/${actionId(this)}/reject`, { reason });
+});
+
+Then("the rejected rollback is audited with reason {string}", async function (this: IncidentWorld, reason: string) {
+  const incident = this.observedIncident ?? await getIncident(this);
+  const action = incident.actions.find((candidate) => candidate.id === actionId(this));
+  assert.equal(action?.status, "REJECTED");
+  assert.equal(action?.actor, "Engineer (demo)");
+  assert.equal(action?.decisionReason, reason);
+  assert.ok(incident.timeline.some((event) => event.type === "ACTION_REJECTED" && event.message.includes(reason)));
+});
+
+When("a caller attempts to execute the proposed rollback directly", async function (this: IncidentWorld) {
+  const response = await fetch(`${address(this)}/api/incidents/${incidentId(this)}/actions/${actionId(this)}/execute`, { method: "POST" });
+  this.lastResponseStatus = response.status;
+});
+
+Given("a resolved payment incident has a proposed rollback", async function (this: IncidentWorld) {
+  await createPaymentIncident(this);
+  await post(this, "/api/simulator/recover");
+  advance(this, 6);
+  assert.equal((await getIncident(this)).status, "MONITORING");
+  await post(this, `/api/incidents/${incidentId(this)}/investigate`);
+  const incidentWithAction = await getIncident(this);
+  const action = incidentWithAction.actions[0];
+  assert.ok(action, "Expected a rollback proposal before resolution");
+  this.actionId = action.id;
+  await post(this, `/api/incidents/${incidentId(this)}/resolve`);
+});
+
+When("a caller attempts to approve the proposed rollback", async function (this: IncidentWorld) {
+  const response = await fetch(`${address(this)}/api/incidents/${incidentId(this)}/actions/${actionId(this)}/approve`, { method: "POST" });
+  this.lastResponseStatus = response.status;
+});
+
+Then("the attempted rollback is rejected", function (this: IncidentWorld) {
+  assert.equal(this.lastResponseStatus, 409);
+});
+
+Then("the rollback remains proposed", async function (this: IncidentWorld) {
+  const action = (await getIncident(this)).actions.find((candidate) => candidate.id === actionId(this));
+  assert.equal(action?.status, "PROPOSED");
+});
+
 async function createPaymentIncident(world: IncidentWorld): Promise<void> {
   await post(world, "/api/simulator/bad-payment-deployment");
   advance(world, 3);
@@ -178,7 +274,18 @@ async function post<T = void>(world: IncidentWorld, path: string): Promise<T> {
   return await response.json() as T;
 }
 
+async function postJson<T>(world: IncidentWorld, path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${address(world)}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (!response.ok) throw new Error(`Expected ${path} to succeed, received ${response.status}`);
+  return await response.json() as T;
+}
+
 function address(world: IncidentWorld): string {
   if (!world.address) throw new Error("Acceptance test application is not listening");
   return world.address;
+}
+
+function actionId(world: IncidentWorld): string {
+  if (!world.actionId) throw new Error("Acceptance scenario has no proposed action");
+  return encodeURIComponent(world.actionId);
 }

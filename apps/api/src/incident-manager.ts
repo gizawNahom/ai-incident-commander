@@ -5,6 +5,17 @@ import {
   type AlertMetricName,
   type AlertPolicy,
 } from "../../../packages/domain/src/alert-policy.ts";
+import {
+  ActionTransitionError,
+  approveSuggestedAction,
+  beginSuggestedActionExecution,
+  completeSuggestedAction,
+  failSuggestedAction,
+  proposeRollback,
+  rejectSuggestedAction,
+  type ActionRisk,
+  type SuggestedAction,
+} from "../../../packages/domain/src/suggested-action.ts";
 
 export type MetricName = AlertMetricName;
 export type MetricUnit = AlertPolicy["unit"];
@@ -24,10 +35,13 @@ export type Alert = {
 };
 
 export type IncidentTimelineEvent = {
-  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED" | "RECOVERY_MONITORING" | "INCIDENT_REOPENED" | "INCIDENT_RESOLVED";
+  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED" | "ACTION_APPROVED" | "ACTION_REJECTED" | "ACTION_EXECUTED" | "ACTION_COMPLETED" | "ACTION_FAILED" | "RECOVERY_MONITORING" | "INCIDENT_REOPENED" | "INCIDENT_RESOLVED";
   readonly timestamp: string;
   readonly message: string;
   readonly serviceId?: string;
+  readonly version?: string;
+  readonly previousVersion?: string;
+  readonly deploymentKind?: "RELEASE" | "ROLLBACK";
 };
 
 export type DetectedIncident = {
@@ -40,12 +54,23 @@ export type DetectedIncident = {
   readonly affectedServices: readonly string[];
   readonly alerts: readonly Alert[];
   readonly timeline: readonly IncidentTimelineEvent[];
+  readonly actions: readonly SuggestedAction[];
+};
+
+export type SuggestedActionRecommendation = {
+  readonly type: "ROLLBACK_DEPLOYMENT";
+  readonly targetServiceId: string;
+  readonly fromVersion: string;
+  readonly toVersion: string;
+  readonly reasoning: string;
+  readonly evidenceIds: readonly string[];
+  readonly risk: ActionRisk;
 };
 
 export type IncidentMetricSample = Readonly<Partial<Record<MetricName, number>>> & { readonly timestamp: string };
 export type IncidentMetricHistory = { readonly serviceId: string; readonly samples: readonly IncidentMetricSample[] };
 export type CapturedLog = { readonly timestamp: string; readonly serviceId: string; readonly level: "warn" | "error" | "info"; readonly message: string };
-export type CapturedDeployment = { readonly timestamp: string; readonly serviceId: string; readonly message: string };
+export type CapturedDeployment = { readonly timestamp: string; readonly serviceId: string; readonly message: string; readonly version?: string; readonly previousVersion?: string; readonly deploymentKind?: "RELEASE" | "ROLLBACK" };
 export type IncidentEvidence = {
   readonly capturedAt: string;
   readonly contextServiceIds: readonly string[];
@@ -68,6 +93,7 @@ export type DetectionStatus = {
 };
 
 export class IncidentResolutionError extends Error {}
+export class IncidentActionError extends Error {}
 
 type ObservedService = {
   readonly id: string;
@@ -78,7 +104,7 @@ type ObservedService = {
 
 type ObservedSystem = { readonly timestamp: string; readonly services: readonly ObservedService[] };
 type OperationalEvent =
-  | { readonly type: "deployment"; readonly timestamp: string; readonly serviceId: string; readonly message: string }
+  | { readonly type: "deployment"; readonly timestamp: string; readonly serviceId: string; readonly version?: string; readonly previousVersion?: string; readonly deploymentKind?: "RELEASE" | "ROLLBACK"; readonly message: string }
   | { readonly type: "log"; readonly timestamp: string; readonly serviceId: string; readonly level?: "warn" | "error" | "info"; readonly message: string }
   | { readonly type: "system"; readonly system: ObservedSystem }
   | { readonly type: "telemetry" };
@@ -117,6 +143,7 @@ export class IncidentManager {
   private policies: readonly MonitoringPolicy[];
   private readonly correlationWindowMs: number;
   private nextIncidentNumber: number;
+  private nextActionNumber = 1;
   private readonly records = new Map<string, IncidentRecord>();
 
   constructor(options: IncidentManagerOptions = {}) {
@@ -172,16 +199,75 @@ export class IncidentManager {
     };
   }
 
-  recordInvestigation(input: { readonly incidentId: string; readonly timestamp: string; readonly hypothesis: string; readonly suggestedAction?: string }): void {
+  recordInvestigation(input: { readonly incidentId: string; readonly timestamp: string; readonly hypothesis: string; readonly suggestedAction?: string | SuggestedActionRecommendation }): void {
     const record = this.records.get(input.incidentId);
     if (!record || record.incident.status === "RESOLVED") return;
+    const action = typeof input.suggestedAction === "string" || !input.suggestedAction
+      ? undefined
+      : this.proposeAction(record.incident, input.suggestedAction, input.timestamp);
     const timeline: IncidentTimelineEvent[] = [
       ...record.incident.timeline,
       { type: "AI_ANALYSIS_STARTED", timestamp: input.timestamp, message: "Offline investigator analysis started" },
       { type: "AI_HYPOTHESIS_GENERATED", timestamp: input.timestamp, message: input.hypothesis },
-      ...(input.suggestedAction ? [{ type: "ACTION_SUGGESTED" as const, timestamp: input.timestamp, message: input.suggestedAction }] : []),
+      ...(typeof input.suggestedAction === "string" ? [{ type: "ACTION_SUGGESTED" as const, timestamp: input.timestamp, message: input.suggestedAction }] : []),
+      ...(action ? [{ type: "ACTION_SUGGESTED" as const, timestamp: input.timestamp, message: `Rollback ${action.targetServiceId} from ${action.fromVersion} to ${action.toVersion} proposed` }] : []),
     ];
-    this.updateRecord(input.incidentId, { ...record, incident: { ...record.incident, timeline } });
+    this.updateRecord(input.incidentId, { ...record, incident: { ...record.incident, timeline, actions: action ? [...record.incident.actions, action] : record.incident.actions } });
+  }
+
+  approveAction(incidentId: string, actionId: string, timestamp: string, actor: string): SuggestedAction {
+    const { record, action } = this.actionRecord(incidentId, actionId);
+    try {
+      const approved = approveSuggestedAction(action, timestamp, actor);
+      this.updateAction(record, approved, { type: "ACTION_APPROVED", timestamp, message: `${actor} approved rollback of ${approved.targetServiceId} from ${approved.fromVersion} to ${approved.toVersion}` });
+      return approved;
+    } catch (error) {
+      throw actionError(error);
+    }
+  }
+
+  rejectAction(incidentId: string, actionId: string, timestamp: string, actor: string, reason: string): SuggestedAction {
+    const { record, action } = this.actionRecord(incidentId, actionId);
+    try {
+      const rejected = rejectSuggestedAction(action, timestamp, actor, reason);
+      this.updateAction(record, rejected, { type: "ACTION_REJECTED", timestamp, message: `${actor} rejected rollback of ${rejected.targetServiceId}: ${reason}` });
+      return rejected;
+    } catch (error) {
+      throw actionError(error);
+    }
+  }
+
+  beginActionExecution(incidentId: string, actionId: string, timestamp: string): SuggestedAction {
+    const { record, action } = this.actionRecord(incidentId, actionId);
+    try {
+      const executing = beginSuggestedActionExecution(action, timestamp);
+      this.updateAction(record, executing, { type: "ACTION_EXECUTED", timestamp, message: `Rollback execution started for ${executing.targetServiceId}` });
+      return executing;
+    } catch (error) {
+      throw actionError(error);
+    }
+  }
+
+  completeAction(incidentId: string, actionId: string, timestamp: string, outcome: string): SuggestedAction {
+    const { record, action } = this.actionRecord(incidentId, actionId);
+    try {
+      const completed = completeSuggestedAction(action, timestamp, outcome);
+      this.updateAction(record, completed, { type: "ACTION_COMPLETED", timestamp, message: `Rollback completed for ${completed.targetServiceId}: ${outcome}` });
+      return completed;
+    } catch (error) {
+      throw actionError(error);
+    }
+  }
+
+  failAction(incidentId: string, actionId: string, timestamp: string, outcome: string): SuggestedAction {
+    const { record, action } = this.actionRecord(incidentId, actionId);
+    try {
+      const failed = failSuggestedAction(action, timestamp, outcome);
+      this.updateAction(record, failed, { type: "ACTION_FAILED", timestamp, message: `Rollback failed for ${failed.targetServiceId}: ${outcome}` });
+      return failed;
+    } catch (error) {
+      throw actionError(error);
+    }
   }
 
   resolve(incidentId: string, timestamp: string, actor: string): DetectedIncident {
@@ -204,7 +290,7 @@ export class IncidentManager {
 
   observe(event: OperationalEvent): void {
     if (event.type === "deployment") {
-      const timelineEvent = { type: "DEPLOYMENT" as const, timestamp: event.timestamp, serviceId: event.serviceId, message: event.message };
+      const timelineEvent = { type: "DEPLOYMENT" as const, timestamp: event.timestamp, serviceId: event.serviceId, version: event.version, previousVersion: event.previousVersion, deploymentKind: event.deploymentKind, message: event.message };
       this.recordEvidence(timelineEvent);
       this.captureDeployment(timelineEvent);
       return;
@@ -330,6 +416,7 @@ export class IncidentManager {
         ...this.timelineEvidence.filter((event) => event.type !== "INCIDENT_CREATED" && (!event.serviceId || [...incidentServices].some((serviceId) => areConnected(system.services, event.serviceId ?? "", serviceId)))),
         creation,
       ],
+      actions: [],
     };
     this.records.set(incidentId, {
       correlationKey,
@@ -364,7 +451,7 @@ export class IncidentManager {
       logs: this.recentLogs.filter((log) => contextServiceIds.includes(log.serviceId)),
       deployments: this.timelineEvidence
         .filter((event) => event.type === "DEPLOYMENT" && event.serviceId && contextServiceIds.includes(event.serviceId))
-        .map((event) => ({ timestamp: event.timestamp, serviceId: event.serviceId ?? "", message: event.message })),
+        .map((event) => ({ timestamp: event.timestamp, serviceId: event.serviceId ?? "", version: event.version, previousVersion: event.previousVersion, deploymentKind: event.deploymentKind, message: event.message })),
       alerts: [...alerts],
     };
   }
@@ -397,7 +484,7 @@ export class IncidentManager {
       if (record.incident.status === "RESOLVED" || !timelineEvent.serviceId || !record.evidence.contextServiceIds.includes(timelineEvent.serviceId)) continue;
       this.updateRecord(incidentId, {
         ...record,
-        evidence: { ...record.evidence, deployments: [...record.evidence.deployments, { timestamp: timelineEvent.timestamp, serviceId: timelineEvent.serviceId, message: timelineEvent.message }] },
+        evidence: { ...record.evidence, deployments: [...record.evidence.deployments, { timestamp: timelineEvent.timestamp, serviceId: timelineEvent.serviceId, version: timelineEvent.version, previousVersion: timelineEvent.previousVersion, deploymentKind: timelineEvent.deploymentKind, message: timelineEvent.message }] },
         incident: { ...record.incident, timeline: [...record.incident.timeline, timelineEvent] },
       });
     }
@@ -432,6 +519,40 @@ export class IncidentManager {
   private updateRecord(incidentId: string, record: IncidentRecord): void {
     this.records.set(incidentId, record);
     this.publish({ type: "incident-updated", incident: record.incident });
+  }
+
+  private proposeAction(incident: DetectedIncident, recommendation: SuggestedActionRecommendation, timestamp: string): SuggestedAction | undefined {
+    const existing = incident.actions.find((action) => action.type === recommendation.type && action.targetServiceId === recommendation.targetServiceId && action.fromVersion === recommendation.fromVersion && action.toVersion === recommendation.toVersion);
+    if (existing) return undefined;
+    return proposeRollback({
+      id: `ACT-${this.nextActionNumber++}`,
+      incidentId: incident.id,
+      targetServiceId: recommendation.targetServiceId,
+      fromVersion: recommendation.fromVersion,
+      toVersion: recommendation.toVersion,
+      reasoning: recommendation.reasoning,
+      evidenceIds: recommendation.evidenceIds,
+      risk: recommendation.risk,
+      proposedAt: timestamp,
+    });
+  }
+
+  private actionRecord(incidentId: string, actionId: string): { readonly record: IncidentRecord; readonly action: SuggestedAction } {
+    const record = this.records.get(incidentId);
+    if (!record) throw new IncidentActionError("Incident not found");
+    if (record.incident.status === "RESOLVED") throw new IncidentActionError("A resolved incident cannot accept a mitigation decision");
+    const action = record.incident.actions.find((candidate) => candidate.id === actionId);
+    if (!action) throw new IncidentActionError("Suggested action not found");
+    return { record, action };
+  }
+
+  private updateAction(record: IncidentRecord, action: SuggestedAction, timelineEvent: IncidentTimelineEvent): void {
+    const incident: DetectedIncident = {
+      ...record.incident,
+      actions: record.incident.actions.map((candidate) => candidate.id === action.id ? action : candidate),
+      timeline: [...record.incident.timeline, timelineEvent],
+    };
+    this.updateRecord(incident.id, { ...record, incident });
   }
 
   private publish(event: IncidentEvent): void {
@@ -493,4 +614,10 @@ function contextTopology(services: readonly ObservedService[], incidentServices:
 function pushBounded<T>(items: T[], item: T, maximum: number, preservedOpeningItems: number): void {
   if (items.length >= maximum) items.splice(Math.min(preservedOpeningItems, items.length - 1), 1);
   items.push(item);
+}
+
+function actionError(error: unknown): IncidentActionError {
+  if (error instanceof IncidentActionError) return error;
+  if (error instanceof ActionTransitionError) return new IncidentActionError(error.message);
+  return new IncidentActionError("Unable to update suggested action");
 }

@@ -17,7 +17,7 @@ test("grounds a deployment hypothesis in generic incident evidence rather than s
         { id: "ALR-2", serviceId: "storefront", title: "Storefront error rate above 10%", threshold: 10, observedValue: 18, unit: "%", triggeredAt: "2026-08-14T12:00:20.000Z" },
       ],
       timeline: [
-        { type: "DEPLOYMENT", timestamp: "2026-08-14T12:00:00.000Z", serviceId: "orders-worker", message: "orders-worker v9.0.0 deployment completed" },
+        { type: "DEPLOYMENT", timestamp: "2026-08-14T12:00:00.000Z", serviceId: "orders-worker", version: "v9.0.0", previousVersion: "v8.9.3", message: "orders-worker v9.0.0 deployment completed" },
         { type: "LOG", timestamp: "2026-08-14T12:00:12.000Z", serviceId: "orders-worker", message: "connection pool timeout while processing order" },
       ],
     },
@@ -43,6 +43,8 @@ test("grounds a deployment hypothesis in generic incident evidence rather than s
   assert.deepEqual(analysis.suggestedAction, {
     type: "ROLLBACK_DEPLOYMENT",
     targetServiceId: "orders-worker",
+    fromVersion: "v9.0.0",
+    toVersion: "v8.9.3",
     status: "PROPOSED",
     risk: "medium",
     rationale: "The deployment immediately preceded the observed degradation.",

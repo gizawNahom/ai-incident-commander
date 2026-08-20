@@ -53,8 +53,10 @@ export type TelemetrySample = {
 export type DeploymentEvent = {
   readonly type: "deployment";
   readonly timestamp: string;
-  readonly serviceId: "payment-service";
-  readonly version: "v1.8.3" | "v1.8.2";
+  readonly serviceId: ServiceId;
+  readonly version: string;
+  readonly previousVersion: string;
+  readonly deploymentKind: "RELEASE" | "ROLLBACK";
   readonly message: string;
 };
 
@@ -68,6 +70,8 @@ export type LogEvent = {
 
 export type SystemEvent = { readonly type: "system"; readonly system: SystemSnapshot };
 export type SimulatorEvent = TelemetrySample | DeploymentEvent | LogEvent | SystemEvent;
+export type RollbackDeploymentInput = { readonly serviceId: ServiceId; readonly fromVersion: string; readonly toVersion: string };
+export type SimulatorActionResult = { readonly ok: boolean; readonly message: string };
 
 type Subscriber = (event: SimulatorEvent) => void;
 type SimulatorOptions = { seed: number; now: () => Date };
@@ -143,6 +147,8 @@ export class TelemetrySimulator {
       timestamp: this.options.now().toISOString(),
       serviceId: "payment-service",
       version: "v1.8.3",
+      previousVersion: "v1.8.2",
+      deploymentKind: "RELEASE",
       message: "payment-service v1.8.3 deployment completed",
     });
   }
@@ -174,12 +180,32 @@ export class TelemetrySimulator {
         timestamp: this.options.now().toISOString(),
         serviceId: "payment-service",
         version: "v1.8.2",
+        previousVersion: "v1.8.3",
+        deploymentKind: "ROLLBACK",
         message: "payment-service rollback to v1.8.2 started",
       });
       return;
     }
     const target = this.failureScenario === "service-outage" ? this.outageTarget : this.failureScenario === "redis-degradation" ? "redis" : "kafka";
     if (target) this.emit({ type: "log", timestamp: this.options.now().toISOString(), serviceId: target, level: "info", message: `${target} recovery sequence started` });
+  }
+
+  rollbackDeployment(input: RollbackDeploymentInput): SimulatorActionResult {
+    const service = this.system.services.find((candidate) => candidate.id === input.serviceId);
+    const baseline = blueprint.find((candidate) => candidate.id === input.serviceId);
+    const matchesInjectedDeployment = this.failureScenario === "bad-payment-deployment" && service?.version === input.fromVersion && baseline?.version === input.toVersion;
+    if (!matchesInjectedDeployment) {
+      return { ok: false, message: `No active defective deployment matches ${input.serviceId} ${input.fromVersion} → ${input.toVersion}` };
+    }
+    this.recover();
+    this.system = {
+      ...this.system,
+      scenario: "recovering",
+      services: this.system.services.map((candidate) => candidate.id === input.serviceId ? { ...candidate, version: input.toVersion } : candidate),
+    };
+    this.latest = this.toGatewaySample(this.system);
+    this.emit({ type: "system", system: this.system });
+    return { ok: true, message: `${input.serviceId} rollback to ${input.toVersion} started` };
   }
 
   advance(): TelemetrySample {

@@ -126,7 +126,7 @@ function validateAiInvestigation(output: AiInvestigationOutput, baseline: Invest
   assertKnownService(output.hypothesis.targetServiceId, baseline.knownEvidence);
   assertConfidence(output.hypothesis.confidence);
   assertKnownEvidence(output.hypothesis.evidenceIds, evidenceById);
-  const suggestedAction = output.suggestedAction ? validateSuggestedAction(output.suggestedAction, evidenceById) : undefined;
+  const suggestedAction = output.suggestedAction ? validateSuggestedAction(output.suggestedAction, evidenceById, baseline.suggestedAction) : undefined;
   return {
     source: "gemini",
     summary: output.summary,
@@ -137,15 +137,18 @@ function validateAiInvestigation(output: AiInvestigationOutput, baseline: Invest
   };
 }
 
-function validateSuggestedAction(action: NonNullable<AiInvestigationOutput["suggestedAction"]>, evidenceById: ReadonlyMap<string, KnownEvidence>): ProposedMitigation {
+function validateSuggestedAction(action: NonNullable<AiInvestigationOutput["suggestedAction"]>, evidenceById: ReadonlyMap<string, KnownEvidence>, baselineAction: ProposedMitigation | undefined): ProposedMitigation {
   assertKnownEvidence(action.evidenceIds, evidenceById);
   const deployment = action.evidenceIds
     .map((evidenceId) => evidenceById.get(evidenceId))
     .find((evidence) => evidence?.kind === "deployment" && evidence.serviceId === action.targetServiceId);
   if (!deployment) throw new Error("AI suggested a rollback without a matching deployment evidence item");
+  if (!baselineAction || baselineAction.targetServiceId !== action.targetServiceId) throw new Error("AI suggested a rollback without a rollback-safe deployment version pair");
   return {
     type: "ROLLBACK_DEPLOYMENT",
     targetServiceId: action.targetServiceId,
+    fromVersion: baselineAction.fromVersion,
+    toVersion: baselineAction.toVersion,
     status: "PROPOSED",
     risk: "medium",
     rationale: "The deployment immediately preceded the observed degradation.",

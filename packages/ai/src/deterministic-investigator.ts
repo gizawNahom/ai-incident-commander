@@ -13,6 +13,9 @@ export type InvestigationTimelineEvent = {
   readonly timestamp: string;
   readonly message: string;
   readonly serviceId?: string;
+  readonly version?: string;
+  readonly previousVersion?: string;
+  readonly deploymentKind?: "RELEASE" | "ROLLBACK";
 };
 
 export type InvestigationContext = {
@@ -57,6 +60,8 @@ export type InvestigationHypothesis = {
 export type ProposedMitigation = {
   readonly type: "ROLLBACK_DEPLOYMENT";
   readonly targetServiceId: string;
+  readonly fromVersion: string;
+  readonly toVersion: string;
   readonly status: "PROPOSED";
   readonly risk: "medium";
   readonly rationale: "The deployment immediately preceded the observed degradation.";
@@ -115,10 +120,12 @@ export class DeterministicInvestigator implements IncidentInvestigator {
       uncertainty: deployment
         ? "The evidence establishes timing and correlation, but correlation does not prove the deployment caused the degradation."
         : "No relevant deployment is present in the available incident evidence, so the initiating cause remains unconfirmed.",
-      suggestedAction: deployment
+      suggestedAction: deployment?.version && deployment.previousVersion
         ? {
             type: "ROLLBACK_DEPLOYMENT",
             targetServiceId: deployment.serviceId,
+            fromVersion: deployment.version,
+            toVersion: deployment.previousVersion,
             status: "PROPOSED",
             risk: "medium",
             rationale: "The deployment immediately preceded the observed degradation.",
@@ -130,7 +137,7 @@ export class DeterministicInvestigator implements IncidentInvestigator {
   private findRelevantDeployment(context: InvestigationContext): InvestigationTimelineEvent | undefined {
     return [...context.incident.timeline]
       .reverse()
-      .find((event) => event.type === "DEPLOYMENT" && event.serviceId !== undefined && isConnectedToAffected(context.services, event.serviceId, context.incident.affectedServices));
+      .find((event) => event.type === "DEPLOYMENT" && event.deploymentKind !== "ROLLBACK" && event.serviceId !== undefined && isConnectedToAffected(context.services, event.serviceId, context.incident.affectedServices));
   }
 
   private deploymentEvidence(deployment: InvestigationTimelineEvent | undefined): readonly KnownEvidence[] {

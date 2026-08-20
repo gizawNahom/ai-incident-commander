@@ -218,6 +218,45 @@ test("records deterministic investigation activity in the incident timeline", ()
   assert.equal(changes.filter((event) => event.type === "incident-updated").length, updatesBeforeInvestigation + 1);
 });
 
+test("retains a suggested rollback and records its explicit approval lifecycle", () => {
+  const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date("2026-08-13T12:00:00.000Z") });
+  const manager = new IncidentManager();
+  simulator.subscribe((event) => manager.observe(event));
+  simulator.triggerBadPaymentDeployment();
+  simulator.advance();
+  simulator.advance();
+  simulator.advance();
+
+  manager.recordInvestigation({
+    incidentId: "INC-1042",
+    timestamp: "2026-08-13T12:01:00.000Z",
+    hypothesis: "The deployment is the likely initiating event.",
+    suggestedAction: {
+      type: "ROLLBACK_DEPLOYMENT",
+      targetServiceId: "payment-service",
+      fromVersion: "v1.8.3",
+      toVersion: "v1.8.2",
+      reasoning: "The deployment immediately preceded the observed degradation.",
+      evidenceIds: ["evidence-deployment"],
+      risk: "medium",
+    },
+  });
+
+  const proposed = manager.find("INC-1042")?.actions[0];
+  assert.equal(proposed?.status, "PROPOSED");
+  assert.equal(proposed?.targetServiceId, "payment-service");
+
+  const approved = manager.approveAction("INC-1042", proposed?.id ?? "", "2026-08-13T12:01:02.000Z", "Engineer (demo)");
+  const executing = manager.beginActionExecution("INC-1042", approved.id, "2026-08-13T12:01:03.000Z");
+  const completed = manager.completeAction("INC-1042", executing.id, "2026-08-13T12:01:04.000Z", "Rollback command accepted by the simulator.");
+
+  assert.equal(completed.status, "COMPLETED");
+  const timeline = manager.find("INC-1042")?.timeline ?? [];
+  assert.ok(timeline.some((event) => event.type === "ACTION_APPROVED"));
+  assert.ok(timeline.some((event) => event.type === "ACTION_EXECUTED"));
+  assert.ok(timeline.some((event) => event.type === "ACTION_COMPLETED"));
+});
+
 test("keeps independent incidents, monitors sustained recovery, and reopens only the matching unresolved incident", () => {
   const manager = new IncidentManager({ firstIncidentNumber: 2000 });
   const snapshot = (timestamp: string, failing: "both" | "billing" | "healthy") => ({

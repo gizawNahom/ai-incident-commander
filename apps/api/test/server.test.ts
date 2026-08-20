@@ -48,6 +48,38 @@ test("an engineer can resolve a monitored incident through the API", async () =>
   }
 });
 
+test("an engineer approval is required before the API starts a proposed rollback", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+    const analysisResponse = await fetch(`${address}/api/incidents/INC-1042/investigate`, { method: "POST" });
+    assert.equal(analysisResponse.status, 200);
+    const beforeApproval = await (await fetch(`${address}/api/incidents/INC-1042`)).json();
+    const action = beforeApproval.actions[0];
+    assert.equal(action.status, "PROPOSED");
+
+    const directExecution = await fetch(`${address}/api/incidents/INC-1042/actions/${action.id}/execute`, { method: "POST" });
+    assert.equal(directExecution.status, 409);
+
+    const approvalResponse = await fetch(`${address}/api/incidents/INC-1042/actions/${action.id}/approve`, { method: "POST" });
+    const approved = await approvalResponse.json();
+    assert.equal(approvalResponse.status, 200);
+    assert.equal(approved.actions[0].status, "COMPLETED");
+    assert.ok(approved.timeline.some((event: { type: string }) => event.type === "ACTION_APPROVED"));
+    assert.ok(approved.timeline.some((event: { type: string }) => event.type === "ACTION_EXECUTED"));
+    assert.ok(approved.timeline.some((event: { type: string }) => event.type === "ACTION_COMPLETED"));
+    const system = await (await fetch(`${address}/api/system`)).json();
+    assert.equal(system.services.find((service: { id: string }) => service.id === "payment-service")?.version, "v1.8.2");
+  } finally {
+    await app.close();
+  }
+});
+
 test("dashboard modules are served to the live dashboard", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();
@@ -339,6 +371,8 @@ test("investigation endpoint returns grounded evidence and only proposes a mitig
     assert.deepEqual(analysis.suggestedAction, {
       type: "ROLLBACK_DEPLOYMENT",
       targetServiceId: "payment-service",
+      fromVersion: "v1.8.3",
+      toVersion: "v1.8.2",
       status: "PROPOSED",
       risk: "medium",
       rationale: "The deployment immediately preceded the observed degradation.",

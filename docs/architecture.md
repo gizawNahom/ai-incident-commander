@@ -30,7 +30,7 @@ docs/adr/              concise architectural decisions
 
 `Incident` is the lifecycle owner: DETECTED → INVESTIGATING → IDENTIFIED → MITIGATING → MONITORING → RESOLVED. It records affected services, alerts, timeline events, hypotheses, actions, and audit events.
 
-`SuggestedAction` is a separate safety-governed entity: PROPOSED → APPROVED/REJECTED → EXECUTING → COMPLETED/FAILED. Only an approved action can invoke a simulator command. `Service`, `Deployment`, `Alert`, `MetricSample`, and `LogEntry` provide evidence; their events feed incident detection and the grounded investigator context.
+`SuggestedAction` is a separate safety-governed entity: PROPOSED → APPROVED/REJECTED → EXECUTING → COMPLETED/FAILED. It records its target service, source and rollback versions, evidence citations, risk, actor, decision reason, timestamps, and outcome. Only the approval use case invokes a simulator command; a public execute attempt is rejected. The initial rollback executor validates that the currently injected defective deployment matches the action before it starts deterministic recovery. `Service`, `Deployment`, `Alert`, `MetricSample`, and `LogEntry` provide evidence; their events feed incident detection and the grounded investigator context.
 
 `AlertPolicy` is a reusable detector configuration: scope (all or selected
 services), metric, comparator, threshold, breach duration, severity, and
@@ -73,8 +73,8 @@ automation remains a later complement for the flagship visual workflow.
 3. Detection: alerts, incident lifecycle, timeline, and audit stream.
 4. Incident Room: topology, evidence, metrics, logs, and timeline.
 5. Grounded investigator: deterministic analysis first; optional Gemini Developer API adapter behind the same port. Provider output is schema-shaped and locally checked against the evidence catalog; absent, failed, or invalid provider output falls back to deterministic analysis.
-6. Human approval: proposed mitigations, RBAC, approval trail, simulated execution.
-7. Deterministic demo story and end-to-end coverage.
+6. Human approval: proposed mitigations, approval trail, and simulated execution. **Completed for deployment rollback using the demo Engineer identity.** RBAC remains a later identity slice.
+7. Deterministic demo story and browser end-to-end coverage.
 8. PostgreSQL persistence, Next.js UI migration, polish, and deployment.
 
 ## First vertical-slice acceptance criteria

@@ -22,9 +22,18 @@ the specification.
    monitoring; and an engineer can explicitly resolve it. A recurrence joins
    the matching unresolved alert signature, while unrelated alert groups open
    separate records.
-5. **Human-approved simulated mitigation — next.** Implement the action lifecycle
-   and audit trail; approval alone may invoke a simulator command.
-6. **PostgreSQL persistence.** Add durable storage only after the preceding
+5. **Human-approved simulated mitigation — completed.** The investigator’s
+   rollback recommendation becomes a retained action with an explicit
+   PROPOSED → APPROVED/REJECTED → EXECUTING → COMPLETED/FAILED lifecycle.
+   Only approval by the demo Engineer invokes the validated simulator rollback;
+   the Incident Room records the action’s version change, decision, outcome,
+   and timeline audit events.
+6. **Run Demo Incident and browser coverage — next.** Add the deterministic
+   one-click recruiter flow and Playwright coverage for the flagship browser
+   journey.
+7. **Simple Engineer/Admin identity.** Add credible lightweight RBAC before
+   expanding the set of operational mitigations.
+8. **PostgreSQL persistence.** Add durable storage only after the preceding
    product model and workflow have been validated.
 
 ## Simulator boundary note

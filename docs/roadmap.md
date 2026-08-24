@@ -31,12 +31,16 @@ the specification.
 6. **Services and Incident History — completed.** The application now exposes
    live service inventory/detail views and reviewable active/resolved incident
    records backed by simulator and preserved evidence read models.
-7. **Run Demo Incident and browser coverage — next.** Add the deterministic
-   one-click recruiter flow and Playwright coverage for the flagship browser
-   journey.
-8. **Simple Engineer/Admin identity.** Add credible lightweight RBAC before
+7. **Browser coverage — completed.** The flagship release-incident journey is
+   one shared Gherkin scenario that runs through both a fast API driver and a
+   Playwright browser driver. It verifies navigation, live updates, grounded
+   analysis, explicit approval, recovery, resolution, and historical evidence.
+   API-only transport-safety scenarios remain separate.
+8. **Run Demo Incident — next.** Add the deterministic one-click recruiter
+   flow.
+9. **Simple Engineer/Admin identity.** Add credible lightweight RBAC before
    expanding the set of operational mitigations.
-9. **PostgreSQL persistence.** Add durable storage only after the preceding
+10. **PostgreSQL persistence.** Add durable storage only after the preceding
    product model and workflow have been validated.
 
 ## Simulator boundary note

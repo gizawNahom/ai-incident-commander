@@ -22,6 +22,7 @@ test("a proposed rollback requires approval before it can execute", () => {
     proposedAt: "2026-08-13T12:00:00.000Z",
   });
 
+  assert.equal(proposed.type, "ROLLBACK_DEPLOYMENT");
   assert.equal(proposed.status, "PROPOSED");
   assert.throws(() => beginSuggestedActionExecution(proposed, "2026-08-13T12:00:01.000Z"), ActionTransitionError);
 

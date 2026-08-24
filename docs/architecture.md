@@ -68,10 +68,13 @@ conservative correlation signature avoids merging a separate failure merely
 because it shares a broad topology with another incident.
 
 Business-level acceptance coverage lives in executable Gherkin feature files
-under `apps/acceptance/features`. Their Cucumber steps start a fresh real HTTP
-server and deterministic simulator for every scenario. This exercises the
-public API, incident manager, and simulator together without mocks; browser
-automation remains a later complement for the flagship visual workflow.
+under `apps/acceptance/features`. The shared flagship journey runs through an
+`IncidentCommanderDriver` boundary: the API driver gives fast feedback against
+a fresh real HTTP server and deterministic simulator, while the Playwright
+browser driver clicks only visible controls and observes rendered UI state.
+Transport-safety scenarios that deliberately bypass the UI remain API-only.
+The browser runner uses a faster test-only simulator clock; production retains
+its two-second update interval.
 
 ## MVP slices
 
@@ -82,7 +85,8 @@ automation remains a later complement for the flagship visual workflow.
 4. Incident Room: topology, evidence, metrics, logs, and timeline.
 5. Grounded investigator: deterministic analysis first; optional Gemini Developer API adapter behind the same port. Provider output is schema-shaped and locally checked against the evidence catalog; absent, failed, or invalid provider output falls back to deterministic analysis.
 6. Human approval: proposed mitigations, approval trail, and simulated execution. **Completed for deployment rollback using the demo Engineer identity.** RBAC remains a later identity slice.
-7. Deterministic demo story and browser end-to-end coverage.
+7. Deterministic demo story. Browser end-to-end coverage is complete for the
+   flagship release-incident journey.
 8. PostgreSQL persistence, Next.js UI migration, polish, and deployment.
 
 ## First vertical-slice acceptance criteria

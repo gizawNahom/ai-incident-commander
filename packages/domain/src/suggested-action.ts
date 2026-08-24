@@ -23,12 +23,12 @@ export type SuggestedAction = {
   readonly outcome?: string;
 };
 
-export type ProposeRollbackInput = Omit<SuggestedAction, "status" | "approvedAt" | "rejectedAt" | "executingAt" | "completedAt" | "failedAt" | "actor" | "decisionReason" | "outcome">;
+export type ProposeRollbackInput = Omit<SuggestedAction, "type" | "status" | "approvedAt" | "rejectedAt" | "executingAt" | "completedAt" | "failedAt" | "actor" | "decisionReason" | "outcome">;
 
 export class ActionTransitionError extends Error {}
 
 export function proposeRollback(input: ProposeRollbackInput): SuggestedAction {
-  return { ...input, status: "PROPOSED" };
+  return { ...input, type: "ROLLBACK_DEPLOYMENT", status: "PROPOSED" };
 }
 
 export function approveSuggestedAction(action: SuggestedAction, timestamp: string, actor: string): SuggestedAction {

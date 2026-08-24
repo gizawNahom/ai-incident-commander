@@ -9,7 +9,7 @@ import { AlertPolicyNotFoundError, AlertPolicyStore, AlertPolicyValidationError 
 import { DeterministicInvestigator, type IncidentInvestigator, type Investigation } from "../../../packages/ai/src/deterministic-investigator.ts";
 import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
 
-type AppOptions = { readonly autoStart?: boolean; readonly investigator?: IncidentInvestigator };
+type AppOptions = { readonly autoStart?: boolean; readonly tickIntervalMs?: number; readonly investigator?: IncidentInvestigator };
 type RunningApp = {
   listen: () => Promise<string>;
   close: () => Promise<void>;
@@ -357,7 +357,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
     json(response, 404, { error: "Route not found", requestId });
   });
 
-  if (options.autoStart !== false) interval = setInterval(() => simulator.advance(), 2_000);
+  if (options.autoStart !== false) interval = setInterval(() => simulator.advance(), options.tickIntervalMs ?? 2_000);
   return {
     advance: () => simulator.advance(),
     triggerBadPaymentDeployment: () => simulator.triggerBadPaymentDeployment(),

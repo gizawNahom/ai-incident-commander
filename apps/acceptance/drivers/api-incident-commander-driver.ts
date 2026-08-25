@@ -11,6 +11,7 @@ type Incident = {
   readonly affectedServices: readonly string[];
   readonly timeline: readonly { readonly type: string; readonly message: string }[];
   readonly actions: readonly { readonly id: string; readonly status: string; readonly targetServiceId: string; readonly toVersion: string }[];
+  readonly commander?: { readonly name: string };
 };
 type System = { readonly services: readonly { readonly id: string; readonly health: string; readonly version: string }[] };
 type ServiceDetail = {
@@ -31,10 +32,20 @@ export class ApiIncidentCommanderDriver implements IncidentCommanderDriver {
   private address: string | undefined;
   private incident: Incident | undefined;
   private actionId: string | undefined;
+  private sessionCookie: string | undefined;
 
   async start(): Promise<void> {
     this.app = createServer({ autoStart: false });
     this.address = await this.app.listen();
+    const response = await fetch(`${this.baseUrl()}/api/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "maya-chen" }),
+    });
+    assert.equal(response.status, 201);
+    const cookie = response.headers.get("set-cookie");
+    assert.ok(cookie, "Expected a demo session cookie");
+    this.sessionCookie = cookie;
   }
 
   async stop(): Promise<void> {
@@ -96,6 +107,14 @@ export class ApiIncidentCommanderDriver implements IncidentCommanderDriver {
     assert.equal(this.incident?.actions.find((action) => action.id === this.actionId)?.status, "PROPOSED");
   }
 
+  async takeIncidentCommand(): Promise<void> {
+    this.incident = await this.post<Incident>(`/api/incidents/${encodeURIComponent(this.incidentId())}/command`);
+  }
+
+  async assertIncidentCommander(): Promise<void> {
+    assert.equal(this.incident?.commander?.name, "Maya Chen");
+  }
+
   async approveRollback(): Promise<void> {
     this.incident = await this.post<Incident>(`/api/incidents/${encodeURIComponent(this.incidentId())}/actions/${encodeURIComponent(this.actionIdValue())}/approve`);
   }
@@ -154,13 +173,13 @@ export class ApiIncidentCommanderDriver implements IncidentCommanderDriver {
   }
 
   private async get<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl()}${path}`);
+    const response = await fetch(`${this.baseUrl()}${path}`, { headers: this.sessionCookie ? { cookie: this.sessionCookie } : undefined });
     if (!response.ok) throw new Error(`Expected ${path} to succeed, received ${response.status}`);
     return await response.json() as T;
   }
 
   private async post<T = void>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl()}${path}`, { method: "POST" });
+    const response = await fetch(`${this.baseUrl()}${path}`, { method: "POST", headers: this.sessionCookie ? { cookie: this.sessionCookie } : undefined });
     if (!response.ok) throw new Error(`Expected ${path} to succeed, received ${response.status}`);
     return await response.json() as T;
   }

@@ -23,6 +23,11 @@
         <div><span>Alerts</span><strong id="room-alert-count">—</strong></div>
       </section>
 
+      <section class="incident-command-panel" id="incident-command" hidden aria-label="Incident command">
+        <div><p class="eyebrow">Human authority</p><h2 id="commander-label">Incident Commander unassigned</h2><p id="command-description">Choose a local demo account to take command of this incident.</p></div>
+        <div class="command-controls"><div id="account-controls" class="account-controls"></div><input id="takeover-reason" type="text" placeholder="Reason required to take over command" aria-label="Reason for taking over incident command" hidden /><button class="button command-button" id="take-command" type="button" hidden>Take command</button></div>
+      </section>
+
       <section class="room-workbench" id="room-workbench" hidden>
         <article class="room-topology-panel">
           <div class="section-heading"><div><p class="eyebrow">Incident record</p><h2>Topology at detection</h2></div><span class="mono">Captured evidence context</span></div>

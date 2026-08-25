@@ -67,6 +67,17 @@ returns before resolution, that record moves back to `INVESTIGATING`. This
 conservative correlation signature avoids merging a separate failure merely
 because it shares a broad topology with another incident.
 
+The current identity slice is deliberately local and in memory: a user chooses
+one of the supplied demo Engineer identities, and the server issues an opaque,
+HTTP-only session cookie. It is not an enterprise authentication solution and
+does not attempt to store passwords. Incident command is an assignment on each
+open incident, rather than a permanent global role. Only the server-identified
+Engineer currently assigned as that incident's commander may approve an action
+or resolve the incident. Another authenticated Engineer can take over command
+only with a recorded reason. All command, approval, and resolution events
+retain the actor's name in the timeline. Sessions and command assignments reset
+with the in-memory application, pending the future PostgreSQL identity slice.
+
 Business-level acceptance coverage lives in executable Gherkin feature files
 under `apps/acceptance/features`. The shared flagship journey runs through an
 `IncidentCommanderDriver` boundary: the API driver gives fast feedback against

@@ -4,7 +4,7 @@ Feature: Human-approved incident mitigation
 
   Scenario Outline: An engineer approves a proposed deployment rollback
     Given a deployment incident has a proposed rollback for "<service>" from "<bad-version>" to "<stable-version>"
-    When Engineer (demo) approves the rollback
+    When Maya Chen takes incident command and approves the rollback
     Then "<service>" is rolled back to version "<stable-version>"
     And the rollback is completed and audited for "<service>"
 
@@ -14,7 +14,7 @@ Feature: Human-approved incident mitigation
 
   Scenario: An engineer rejects a proposed deployment rollback
     Given a deployment incident has a proposed rollback for "payment-service" from "v1.8.3" to "v1.8.2"
-    When Engineer (demo) rejects the rollback because "Investigating Redis first"
+    When Maya Chen rejects the rollback because "Investigating Redis first"
     Then "payment-service" remains on version "v1.8.3"
     And the rejected rollback is audited with reason "Investigating Redis first"
 

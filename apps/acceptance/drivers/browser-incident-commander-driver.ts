@@ -94,7 +94,17 @@ export class BrowserIncidentCommanderDriver implements IncidentCommanderDriver {
     const actionText = await action.innerText();
     assert.match(actionText, /proposed — approval required/i);
     assert.match(actionText, /v1\.8\.3 → v1\.8\.2/i);
-    await page.getByRole("button", { name: "Approve rollback" }).waitFor({ state: "visible" });
+    await page.getByText("Take incident command to approve this rollback.", { exact: true }).waitFor({ state: "visible" });
+  }
+
+  async takeIncidentCommand(): Promise<void> {
+    await this.pageValue().getByRole("button", { name: "Sign in as Maya Chen" }).click();
+    await this.pageValue().getByRole("button", { name: "Take command" }).click();
+  }
+
+  async assertIncidentCommander(): Promise<void> {
+    await this.pageValue().getByText("You are the Incident Commander", { exact: true }).waitFor({ state: "visible" });
+    await this.pageValue().getByRole("button", { name: "Approve rollback" }).waitFor({ state: "visible" });
   }
 
   async approveRollback(): Promise<void> {

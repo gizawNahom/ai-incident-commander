@@ -8,6 +8,7 @@ import { IncidentActionError, IncidentManager, IncidentResolutionError, type Inc
 import { AlertPolicyNotFoundError, AlertPolicyStore, AlertPolicyValidationError } from "./alert-policy-store.ts";
 import { DeterministicInvestigator, type IncidentInvestigator, type Investigation } from "../../../packages/ai/src/deterministic-investigator.ts";
 import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
+import { DemoSessionStore, expiredSessionCookie, sessionCookie, type DemoUser } from "./demo-session-store.ts";
 
 type AppOptions = { readonly autoStart?: boolean; readonly tickIntervalMs?: number; readonly investigator?: IncidentInvestigator };
 type RunningApp = {
@@ -38,6 +39,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
   const incidentManager = new IncidentManager({ policies: alertPolicies.list() });
   const deterministicInvestigator = new DeterministicInvestigator();
   const investigator = options.investigator ?? configuredInvestigator(deterministicInvestigator);
+  const sessions = new DemoSessionStore();
   const streams = new Set<ServerResponse>();
   const unsubscribe = simulator.subscribe((event: SimulatorEvent) => {
     broadcast(streams, event);
@@ -55,6 +57,35 @@ export function createServer(options: AppOptions = {}): RunningApp {
 
     if (url.pathname === "/api/health") {
       json(response, 200, { status: "ok", service: "ai-incident-commander-api" });
+      return;
+    }
+    if (url.pathname === "/api/session") {
+      if (request.method === "GET") {
+        json(response, 200, { user: sessions.find(request.headers.cookie) ?? null, users: sessions.users() });
+        return;
+      }
+      if (request.method === "DELETE") {
+        sessions.end(request.headers.cookie);
+        response.setHeader("set-cookie", expiredSessionCookie());
+        json(response, 204, undefined);
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      try {
+        const userId = demoUserId(await readJson(request));
+        const session = sessions.start(userId);
+        if (!session) {
+          json(response, 400, { error: "A known demo user is required", requestId });
+          return;
+        }
+        response.setHeader("set-cookie", sessionCookie(session.token));
+        json(response, 201, { user: session.user });
+      } catch (error) {
+        json(response, 400, { error: error instanceof Error ? error.message : "Unable to start demo session", requestId });
+      }
       return;
     }
     if (url.pathname === "/api/telemetry/current") {
@@ -225,12 +256,33 @@ export function createServer(options: AppOptions = {}): RunningApp {
         return;
       }
       const incidentId = decodeURIComponent(url.pathname.slice("/api/incidents/".length, -"/resolve".length));
+      const actor = requireDemoUser(request.headers.cookie, sessions, response, requestId);
+      if (!actor) return;
       try {
-        const incident = incidentManager.resolve(incidentId, simulator.snapshot().timestamp, "Engineer (demo)");
+        const incident = incidentManager.resolve(incidentId, simulator.snapshot().timestamp, actor);
         json(response, 200, incident);
       } catch (error) {
-        const status = error instanceof IncidentResolutionError && error.message === "Incident not found" ? 404 : 409;
+        const status = error instanceof IncidentResolutionError && error.message === "Incident not found" ? 404 : error instanceof IncidentResolutionError && /Incident Commander/.test(error.message) ? 403 : 409;
         json(response, status, { error: error instanceof Error ? error.message : "Unable to resolve incident", requestId });
+      }
+      return;
+    }
+    if (url.pathname.startsWith("/api/incidents/") && url.pathname.endsWith("/command")) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "Method not allowed", requestId });
+        return;
+      }
+      const incidentId = decodeURIComponent(url.pathname.slice("/api/incidents/".length, -"/command".length));
+      const actor = requireDemoUser(request.headers.cookie, sessions, response, requestId);
+      if (!actor) return;
+      try {
+        const takeoverReason = request.headers["content-type"]?.includes("application/json") ? commandTakeoverReason(await readJson(request)) : undefined;
+        const incident = incidentManager.takeCommand(incidentId, simulator.snapshot().timestamp, actor, takeoverReason);
+        json(response, 200, incident);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to take incident command";
+        const status = message === "Incident not found" ? 404 : 409;
+        json(response, status, { error: message, requestId });
       }
       return;
     }
@@ -244,13 +296,15 @@ export function createServer(options: AppOptions = {}): RunningApp {
         json(response, 409, { error: "Suggested actions execute only through explicit approval", requestId });
         return;
       }
+      const actor = requireDemoUser(request.headers.cookie, sessions, response, requestId);
+      if (!actor) return;
       const timestamp = simulator.snapshot().timestamp;
       try {
         if (actionRoute.operation === "reject") {
           const reason = actionRejectionReason(await readJson(request));
-          incidentManager.rejectAction(actionRoute.incidentId, actionRoute.actionId, timestamp, "Engineer (demo)", reason);
+          incidentManager.rejectAction(actionRoute.incidentId, actionRoute.actionId, timestamp, actor, reason);
         } else {
-          const approved = incidentManager.approveAction(actionRoute.incidentId, actionRoute.actionId, timestamp, "Engineer (demo)");
+          const approved = incidentManager.approveAction(actionRoute.incidentId, actionRoute.actionId, timestamp, actor);
           const executing = incidentManager.beginActionExecution(actionRoute.incidentId, approved.id, timestamp);
           const result = simulator.rollbackDeployment({
             serviceId: executing.targetServiceId as ServiceId,
@@ -268,7 +322,7 @@ export function createServer(options: AppOptions = {}): RunningApp {
         json(response, 200, incident);
       } catch (error) {
         const message = actionErrorMessage(error);
-        const status = message.includes("not found") ? 404 : 409;
+        const status = message.includes("not found") ? 404 : /Incident Commander|Incident Commander must be assigned/.test(message) ? 403 : 409;
         json(response, status, { error: message, requestId });
       }
       return;
@@ -443,6 +497,25 @@ function outageErrorMessage(error: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function demoUserId(value: unknown): string {
+  if (!isRecord(value) || typeof value.userId !== "string" || value.userId.trim().length === 0) {
+    throw new Error("A demo user is required");
+  }
+  return value.userId;
+}
+
+function commandTakeoverReason(value: unknown): string {
+  if (!isRecord(value) || typeof value.reason !== "string") throw new Error("A takeover reason must be text");
+  return value.reason;
+}
+
+function requireDemoUser(cookieHeader: string | undefined, sessions: DemoSessionStore, response: ServerResponse, requestId: string): DemoUser | undefined {
+  const user = sessions.find(cookieHeader);
+  if (user) return user;
+  json(response, 401, { error: "Sign in with a demo account before performing incident operations", requestId });
+  return undefined;
 }
 
 function isInvestigationTimelineEvent(event: { readonly type: string }): event is { readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED"; readonly timestamp: string; readonly message: string; readonly serviceId?: string; readonly version?: string; readonly previousVersion?: string; readonly deploymentKind?: "RELEASE" | "ROLLBACK" } {

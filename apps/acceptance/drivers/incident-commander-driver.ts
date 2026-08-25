@@ -10,6 +10,8 @@ export interface IncidentCommanderDriver {
   analyzeIncident(): Promise<void>;
   assertGroundedDeploymentEvidence(): Promise<void>;
   assertRollbackProposedWithoutSystemChange(): Promise<void>;
+  takeIncidentCommand(): Promise<void>;
+  assertIncidentCommander(): Promise<void>;
   approveRollback(): Promise<void>;
   assertPaymentReturnsToStableVersion(): Promise<void>;
   assertIncidentMonitoringRecovery(): Promise<void>;

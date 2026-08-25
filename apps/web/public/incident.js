@@ -19,17 +19,24 @@ const elements = {
   workbench: document.getElementById("room-workbench"),
   evidence: document.getElementById("room-evidence"),
   alertCount: document.getElementById("room-alert-count"),
+  accountControls: document.getElementById("account-controls"),
+  commandDescription: document.getElementById("command-description"),
+  commandPanel: document.getElementById("incident-command"),
+  commanderLabel: document.getElementById("commander-label"),
   investigateButton: document.getElementById("investigate-button"),
   investigator: document.getElementById("room-investigator"),
   investigationResult: document.getElementById("investigation-result"),
   liveState: document.getElementById("room-live-state"),
   resolveButton: document.getElementById("resolve-incident"),
+  takeCommand: document.getElementById("take-command"),
+  takeoverReason: document.getElementById("takeover-reason"),
 };
 
 let incident;
 let system;
 let evidence;
 let analysis;
+let session = { user: null, users: [] };
 
 function format(value) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
@@ -54,7 +61,7 @@ function renderIncident(nextIncident) {
   elements.status.textContent = incident.status;
   elements.services.textContent = incident.affectedServices.length;
   elements.alertCount.textContent = incident.alerts.length;
-  elements.resolveButton.hidden = incident.status !== "MONITORING";
+  renderIncidentCommand();
   elements.alerts.replaceChildren(...incident.alerts.map((alert) => {
     const item = document.createElement("li");
     item.innerHTML = `<strong>${alert.title}</strong><span>${format(alert.observedValue)}${alert.unit} observed · threshold ${alert.threshold}${alert.unit}</span>`;
@@ -67,6 +74,70 @@ function renderIncident(nextIncident) {
   elements.evidence.hidden = false;
   elements.investigator.hidden = false;
   if (analysis) renderInvestigation(analysis);
+}
+
+function currentUserIsCommander() {
+  return Boolean(session.user && incident?.commander?.id === session.user.id);
+}
+
+function renderIncidentCommand() {
+  elements.commandPanel.hidden = false;
+  const isOpen = incident.status !== "RESOLVED";
+  const commander = incident.commander;
+  const isTakeover = Boolean(commander && !currentUserIsCommander());
+  elements.commanderLabel.textContent = commander
+    ? currentUserIsCommander() ? "You are the Incident Commander" : `Incident Commander: ${commander.name}`
+    : "Incident Commander unassigned";
+  elements.commandDescription.textContent = commander
+    ? currentUserIsCommander() ? "You may approve mitigations and resolve this incident after recovery monitoring." : `${commander.name} holds approval and resolution authority for this incident.`
+    : session.user ? "Take command to approve a mitigation or resolve this incident." : "Choose a local demo account to take command of this incident.";
+  elements.takeCommand.hidden = !isOpen || !session.user || currentUserIsCommander();
+  elements.takeCommand.textContent = isTakeover ? "Take over command" : "Take command";
+  elements.takeoverReason.hidden = !isTakeover;
+  if (!isTakeover) elements.takeoverReason.value = "";
+  elements.resolveButton.hidden = incident.status !== "MONITORING" || !currentUserIsCommander();
+  renderAccountControls();
+}
+
+function renderAccountControls() {
+  const controls = [];
+  if (session.user) {
+    controls.push(element("span", "active-account", `Signed in as ${session.user.name}`));
+    const signOut = element("button", "text-button", "Switch account");
+    signOut.type = "button";
+    signOut.addEventListener("click", signOutAccount);
+    controls.push(signOut);
+  } else {
+    for (const user of session.users) {
+      const signIn = element("button", "button secondary account-sign-in", `Sign in as ${user.name}`);
+      signIn.type = "button";
+      signIn.addEventListener("click", () => signInAs(user.id));
+      controls.push(signIn);
+    }
+  }
+  elements.accountControls.replaceChildren(...controls);
+}
+
+async function signInAs(userId) {
+  try {
+    const response = await fetch("/api/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId }) });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error ?? "Unable to sign in");
+    session = { ...session, user: payload.user };
+    renderIncidentCommand();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Unable to sign in.");
+  }
+}
+
+async function signOutAccount() {
+  try {
+    await fetch("/api/session", { method: "DELETE" });
+    session = { ...session, user: null };
+    renderIncidentCommand();
+  } catch {
+    showError("Unable to switch account.");
+  }
 }
 
 function element(tag, className, content) {
@@ -99,7 +170,8 @@ function renderInvestigation(nextAnalysis) {
     );
     if (view.action.decisionReason) action.append(element("p", "action-outcome", `Decision reason: ${view.action.decisionReason}`));
     if (view.action.outcome) action.append(element("p", "action-outcome", view.action.outcome));
-    if (view.action.canDecide) action.append(renderActionControls(view.action));
+    if (view.action.canDecide && currentUserIsCommander()) action.append(renderActionControls(view.action));
+    if (view.action.canDecide && !currentUserIsCommander()) action.append(element("p", "action-outcome", incident?.commander ? `Only Incident Commander ${incident.commander.name} can approve this rollback.` : "Take incident command to approve this rollback."));
     elements.investigationResult.append(action);
   }
   elements.investigationResult.hidden = false;
@@ -267,7 +339,8 @@ async function loadRoom() {
     return;
   }
   try {
-    const [nextIncident, nextEvidence, nextSystem] = await Promise.all([getJson(`/api/incidents/${encodeURIComponent(incidentId)}`), getJson(`/api/incidents/${encodeURIComponent(incidentId)}/evidence`), getJson("/api/system")]);
+    const [nextIncident, nextEvidence, nextSystem, nextSession] = await Promise.all([getJson(`/api/incidents/${encodeURIComponent(incidentId)}`), getJson(`/api/incidents/${encodeURIComponent(incidentId)}/evidence`), getJson("/api/system"), getJson("/api/session")]);
+    session = nextSession;
     renderIncident(nextIncident);
     renderEvidence(nextEvidence);
     renderLiveState(nextSystem);
@@ -322,6 +395,33 @@ elements.resolveButton.addEventListener("click", async () => {
   } finally {
     elements.resolveButton.disabled = false;
     elements.resolveButton.textContent = "Resolve incident";
+  }
+});
+
+elements.takeCommand.addEventListener("click", async () => {
+  if (!incident) return;
+  const isTakeover = Boolean(incident.commander && !currentUserIsCommander());
+  const reason = elements.takeoverReason.value.trim();
+  if (isTakeover && !reason) {
+    elements.takeoverReason.focus();
+    showError("A takeover reason is required.");
+    return;
+  }
+  elements.takeCommand.disabled = true;
+  elements.takeCommand.textContent = isTakeover ? "Taking over…" : "Taking command…";
+  try {
+    const response = await fetch(`/api/incidents/${encodeURIComponent(incident.id)}/command`, {
+      method: "POST",
+      ...(isTakeover ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) } : {}),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error ?? "Unable to take incident command");
+    renderIncident(payload);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Unable to take incident command.");
+  } finally {
+    elements.takeCommand.disabled = false;
+    elements.takeCommand.textContent = "Take command";
   }
 });
 

@@ -55,7 +55,15 @@ Then("proposes a rollback without changing the system", async function (this: Sh
   await driver(this).assertRollbackProposedWithoutSystemChange();
 });
 
-When("the engineer approves the rollback", async function (this: SharedJourneyWorld) {
+When("the engineer takes incident command", async function (this: SharedJourneyWorld) {
+  await driver(this).takeIncidentCommand();
+});
+
+Then("the incident records the engineer as commander", async function (this: SharedJourneyWorld) {
+  await driver(this).assertIncidentCommander();
+});
+
+When("the incident commander approves the rollback", async function (this: SharedJourneyWorld) {
   await driver(this).approveRollback();
 });
 
@@ -67,7 +75,7 @@ Then("the incident enters recovery monitoring", async function (this: SharedJour
   await driver(this).assertIncidentMonitoringRecovery();
 });
 
-When("the engineer resolves the monitored incident", async function (this: SharedJourneyWorld) {
+When("the incident commander resolves the monitored incident", async function (this: SharedJourneyWorld) {
   await driver(this).resolveMonitoredIncident();
 });
 

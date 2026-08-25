@@ -16,11 +16,14 @@ Feature: Engineer responds to a defective deployment
     Then the investigator presents grounded deployment evidence
     And proposes a rollback without changing the system
 
-    When the engineer approves the rollback
+    When the engineer takes incident command
+    Then the incident records the engineer as commander
+
+    When the incident commander approves the rollback
     Then Payment Service returns to its stable version
     And the incident enters recovery monitoring
 
-    When the engineer resolves the monitored incident
+    When the incident commander resolves the monitored incident
     And opens Incident History
     Then the resolved incident is listed
 

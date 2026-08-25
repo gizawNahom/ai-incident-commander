@@ -16,6 +16,13 @@ import {
   type ActionRisk,
   type SuggestedAction,
 } from "../../../packages/domain/src/suggested-action.ts";
+import {
+  assignIncidentCommander,
+  IncidentCommandError,
+  requireIncidentCommander,
+  type IncidentActor,
+  type IncidentCommander,
+} from "../../../packages/domain/src/incident-command.ts";
 
 export type MetricName = AlertMetricName;
 export type MetricUnit = AlertPolicy["unit"];
@@ -35,7 +42,7 @@ export type Alert = {
 };
 
 export type IncidentTimelineEvent = {
-  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED" | "ACTION_APPROVED" | "ACTION_REJECTED" | "ACTION_EXECUTED" | "ACTION_COMPLETED" | "ACTION_FAILED" | "RECOVERY_MONITORING" | "INCIDENT_REOPENED" | "INCIDENT_RESOLVED";
+  readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED" | "INCIDENT_COMMAND_ASSIGNED" | "INCIDENT_COMMAND_TRANSFERRED" | "AI_ANALYSIS_STARTED" | "AI_HYPOTHESIS_GENERATED" | "ACTION_SUGGESTED" | "ACTION_APPROVED" | "ACTION_REJECTED" | "ACTION_EXECUTED" | "ACTION_COMPLETED" | "ACTION_FAILED" | "RECOVERY_MONITORING" | "INCIDENT_REOPENED" | "INCIDENT_RESOLVED";
   readonly timestamp: string;
   readonly message: string;
   readonly serviceId?: string;
@@ -55,6 +62,7 @@ export type DetectedIncident = {
   readonly alerts: readonly Alert[];
   readonly timeline: readonly IncidentTimelineEvent[];
   readonly actions: readonly SuggestedAction[];
+  readonly commander?: IncidentCommander;
 };
 
 export type SuggestedActionRecommendation = {
@@ -94,6 +102,7 @@ export type DetectionStatus = {
 
 export class IncidentResolutionError extends Error {}
 export class IncidentActionError extends Error {}
+export class IncidentCommandAssignmentError extends Error {}
 
 type ObservedService = {
   readonly id: string;
@@ -219,22 +228,60 @@ export class IncidentManager {
     this.updateRecord(input.incidentId, { ...record, incident: { ...record.incident, timeline, actions: action ? [...record.incident.actions, action] : record.incident.actions } });
   }
 
-  approveAction(incidentId: string, actionId: string, timestamp: string, actor: string): SuggestedAction {
+  takeCommand(incidentId: string, timestamp: string, actor: IncidentActor, takeoverReason?: string): DetectedIncident {
+    const record = this.records.get(incidentId);
+    if (!record) throw new IncidentCommandAssignmentError("Incident not found");
+    if (record.incident.status === "RESOLVED") throw new IncidentCommandAssignmentError("A resolved incident cannot accept an Incident Commander");
+    try {
+      if (record.incident.commander && record.incident.commander.id !== actor.id) {
+        if (!takeoverReason || takeoverReason.trim().length === 0) throw new IncidentCommandAssignmentError("A takeover reason is required to replace the current Incident Commander");
+        const previousCommander = record.incident.commander;
+        const commander: IncidentCommander = { ...actor, assignedAt: timestamp };
+        const incident: DetectedIncident = {
+          ...record.incident,
+          commander,
+          timeline: [...record.incident.timeline, {
+            type: "INCIDENT_COMMAND_TRANSFERRED",
+            timestamp,
+            message: `${commander.name} took incident command from ${previousCommander.name}: ${takeoverReason.trim()}`,
+          }],
+        };
+        this.updateRecord(incidentId, { ...record, incident });
+        return incident;
+      }
+      const commander = assignIncidentCommander(record.incident.commander, actor, timestamp);
+      const incident: DetectedIncident = {
+        ...record.incident,
+        commander,
+        timeline: record.incident.commander
+          ? record.incident.timeline
+          : [...record.incident.timeline, { type: "INCIDENT_COMMAND_ASSIGNED", timestamp, message: `${commander.name} took incident command` }],
+      };
+      this.updateRecord(incidentId, { ...record, incident });
+      return incident;
+    } catch (error) {
+      if (error instanceof IncidentCommandError) throw new IncidentCommandAssignmentError(error.message);
+      throw error;
+    }
+  }
+
+  approveAction(incidentId: string, actionId: string, timestamp: string, actor: IncidentActor): SuggestedAction {
     const { record, action } = this.actionRecord(incidentId, actionId);
     try {
-      const approved = approveSuggestedAction(action, timestamp, actor);
-      this.updateAction(record, approved, { type: "ACTION_APPROVED", timestamp, message: `${actor} approved rollback of ${approved.targetServiceId} from ${approved.fromVersion} to ${approved.toVersion}` });
+      requireIncidentCommander(record.incident.commander, actor);
+      const approved = approveSuggestedAction(action, timestamp, actor.name);
+      this.updateAction(record, approved, { type: "ACTION_APPROVED", timestamp, message: `${actor.name} approved rollback of ${approved.targetServiceId} from ${approved.fromVersion} to ${approved.toVersion}` });
       return approved;
     } catch (error) {
       throw actionError(error);
     }
   }
 
-  rejectAction(incidentId: string, actionId: string, timestamp: string, actor: string, reason: string): SuggestedAction {
+  rejectAction(incidentId: string, actionId: string, timestamp: string, actor: IncidentActor, reason: string): SuggestedAction {
     const { record, action } = this.actionRecord(incidentId, actionId);
     try {
-      const rejected = rejectSuggestedAction(action, timestamp, actor, reason);
-      this.updateAction(record, rejected, { type: "ACTION_REJECTED", timestamp, message: `${actor} rejected rollback of ${rejected.targetServiceId}: ${reason}` });
+      const rejected = rejectSuggestedAction(action, timestamp, actor.name, reason);
+      this.updateAction(record, rejected, { type: "ACTION_REJECTED", timestamp, message: `${actor.name} rejected rollback of ${rejected.targetServiceId}: ${reason}` });
       return rejected;
     } catch (error) {
       throw actionError(error);
@@ -274,10 +321,15 @@ export class IncidentManager {
     }
   }
 
-  resolve(incidentId: string, timestamp: string, actor: string): DetectedIncident {
+  resolve(incidentId: string, timestamp: string, actor: IncidentActor): DetectedIncident {
     const record = this.records.get(incidentId);
     if (!record) throw new IncidentResolutionError("Incident not found");
     if (record.incident.status !== "MONITORING") throw new IncidentResolutionError("Only an incident in monitoring can be resolved");
+    try {
+      requireIncidentCommander(record.incident.commander, actor);
+    } catch (error) {
+      throw new IncidentResolutionError(error instanceof Error ? error.message : "Incident command is required");
+    }
     const incident: DetectedIncident = {
       ...record.incident,
       status: "RESOLVED",
@@ -285,7 +337,7 @@ export class IncidentManager {
       timeline: [...record.incident.timeline, {
         type: "INCIDENT_RESOLVED",
         timestamp,
-        message: `${actor} resolved this incident after recovery monitoring`,
+        message: `${actor.name} resolved this incident after recovery monitoring`,
       }],
     };
     this.updateRecord(incidentId, { ...record, incident });
@@ -628,5 +680,6 @@ function pushBounded<T>(items: T[], item: T, maximum: number, preservedOpeningIt
 function actionError(error: unknown): IncidentActionError {
   if (error instanceof IncidentActionError) return error;
   if (error instanceof ActionTransitionError) return new IncidentActionError(error.message);
+  if (error instanceof IncidentCommandError) return new IncidentActionError(error.message);
   return new IncidentActionError("Unable to update suggested action");
 }

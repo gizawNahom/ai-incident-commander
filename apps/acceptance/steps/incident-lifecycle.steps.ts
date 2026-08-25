@@ -61,6 +61,7 @@ class IncidentWorld {
   incidentHistory: readonly Incident[] = [];
   activeIncidentId: string | undefined;
   resolvedIncidentId: string | undefined;
+  sessionCookie: string | undefined;
 }
 
 setWorldConstructor(IncidentWorld);
@@ -127,6 +128,7 @@ Given("a payment incident is monitoring recovery", async function (this: Inciden
 });
 
 When("the engineer resolves the incident", async function (this: IncidentWorld) {
+  await takeIncidentCommand(this);
   this.observedIncident = await post<Incident>(this, `/api/incidents/${incidentId(this)}/resolve`);
 });
 
@@ -135,7 +137,7 @@ Then("the incident is resolved", async function (this: IncidentWorld) {
 });
 
 Then("the audit timeline says the engineer resolved it", function (this: IncidentWorld) {
-  assert.ok(this.observedIncident?.timeline.some((event) => event.type === "INCIDENT_RESOLVED" && event.message.includes("Engineer (demo)")));
+  assert.ok(this.observedIncident?.timeline.some((event) => event.type === "INCIDENT_RESOLVED" && event.message.includes("Maya Chen")));
 });
 
 When("the payment path deteriorates again", async function (this: IncidentWorld) {
@@ -186,7 +188,8 @@ Given("a deployment incident has a proposed rollback for {string} from {string} 
   this.actionId = action.id;
 });
 
-When(/^Engineer \(demo\) approves the rollback$/, async function (this: IncidentWorld) {
+When("Maya Chen takes incident command and approves the rollback", async function (this: IncidentWorld) {
+  await takeIncidentCommand(this);
   this.observedIncident = await post<Incident>(this, `/api/incidents/${incidentId(this)}/actions/${actionId(this)}/approve`);
 });
 
@@ -204,13 +207,14 @@ Then("the rollback is completed and audited for {string}", async function (this:
   const incident = this.observedIncident ?? await getIncident(this);
   const action = incident.actions.find((candidate) => candidate.id === actionId(this));
   assert.equal(action?.status, "COMPLETED");
-  assert.equal(action?.actor, "Engineer (demo)");
+  assert.equal(action?.actor, "Maya Chen");
   assert.ok(incident.timeline.some((event) => event.type === "ACTION_APPROVED" && event.message.includes(serviceId)));
   assert.ok(incident.timeline.some((event) => event.type === "ACTION_EXECUTED" && event.message.includes(serviceId)));
   assert.ok(incident.timeline.some((event) => event.type === "ACTION_COMPLETED" && event.message.includes(serviceId)));
 });
 
-When(/^Engineer \(demo\) rejects the rollback because "([^"]+)"$/, async function (this: IncidentWorld, reason: string) {
+When(/^Maya Chen rejects the rollback because "([^"]+)"$/, async function (this: IncidentWorld, reason: string) {
+  await ensureMayaSession(this);
   this.observedIncident = await postJson<Incident>(this, `/api/incidents/${incidentId(this)}/actions/${actionId(this)}/reject`, { reason });
 });
 
@@ -218,7 +222,7 @@ Then("the rejected rollback is audited with reason {string}", async function (th
   const incident = this.observedIncident ?? await getIncident(this);
   const action = incident.actions.find((candidate) => candidate.id === actionId(this));
   assert.equal(action?.status, "REJECTED");
-  assert.equal(action?.actor, "Engineer (demo)");
+  assert.equal(action?.actor, "Maya Chen");
   assert.equal(action?.decisionReason, reason);
   assert.ok(incident.timeline.some((event) => event.type === "ACTION_REJECTED" && event.message.includes(reason)));
 });
@@ -238,11 +242,13 @@ Given("a resolved payment incident has a proposed rollback", async function (thi
   const action = incidentWithAction.actions[0];
   assert.ok(action, "Expected a rollback proposal before resolution");
   this.actionId = action.id;
+  await takeIncidentCommand(this);
   await post(this, `/api/incidents/${incidentId(this)}/resolve`);
 });
 
 When("a caller attempts to approve the proposed rollback", async function (this: IncidentWorld) {
-  const response = await fetch(`${address(this)}/api/incidents/${incidentId(this)}/actions/${actionId(this)}/approve`, { method: "POST" });
+  await ensureMayaSession(this);
+  const response = await fetch(`${address(this)}/api/incidents/${incidentId(this)}/actions/${actionId(this)}/approve`, { method: "POST", headers: { cookie: sessionCookie(this) } });
   this.lastResponseStatus = response.status;
 });
 
@@ -429,6 +435,7 @@ Given("a {string} deployment incident has been resolved", async function (this: 
   await post(this, `/api/incidents/${incidentId(this)}/investigate`);
   const action = (await getIncident(this)).actions[0];
   assert.ok(action);
+  await takeIncidentCommand(this);
   await post(this, `/api/incidents/${incidentId(this)}/actions/${encodeURIComponent(action.id)}/approve`);
   advance(this, 6);
   await post(this, `/api/incidents/${incidentId(this)}/resolve`);
@@ -525,7 +532,27 @@ async function createAndResolvePaymentIncident(world: IncidentWorld): Promise<vo
   await createPaymentIncident(world);
   await post(world, "/api/simulator/recover");
   advance(world, 6);
+  await takeIncidentCommand(world);
   await post(world, `/api/incidents/${incidentId(world)}/resolve`);
+}
+
+async function ensureMayaSession(world: IncidentWorld): Promise<void> {
+  if (world.sessionCookie) return;
+  const response = await fetch(`${address(world)}/api/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId: "maya-chen" }),
+  });
+  assert.equal(response.status, 201);
+  const cookie = response.headers.get("set-cookie");
+  assert.ok(cookie, "Expected Maya's demo session cookie");
+  world.sessionCookie = cookie;
+}
+
+async function takeIncidentCommand(world: IncidentWorld): Promise<void> {
+  await ensureMayaSession(world);
+  const response = await fetch(`${address(world)}/api/incidents/${incidentId(world)}/command`, { method: "POST", headers: { cookie: sessionCookie(world) } });
+  assert.equal(response.status, 200);
 }
 
 async function setPolicySeverity(world: IncidentWorld, severity: "SEV-1" | "SEV-2"): Promise<void> {
@@ -547,13 +574,13 @@ async function getJson<T>(world: IncidentWorld, path: string): Promise<T> {
 }
 
 async function post<T = void>(world: IncidentWorld, path: string): Promise<T> {
-  const response = await fetch(`${address(world)}${path}`, { method: "POST" });
+  const response = await fetch(`${address(world)}${path}`, { method: "POST", headers: world.sessionCookie ? { cookie: world.sessionCookie } : undefined });
   if (!response.ok) throw new Error(`Expected ${path} to succeed, received ${response.status}`);
   return await response.json() as T;
 }
 
 async function postJson<T>(world: IncidentWorld, path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${address(world)}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const response = await fetch(`${address(world)}${path}`, { method: "POST", headers: { "content-type": "application/json", ...(world.sessionCookie ? { cookie: world.sessionCookie } : {}) }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error(`Expected ${path} to succeed, received ${response.status}`);
   return await response.json() as T;
 }
@@ -566,4 +593,9 @@ function address(world: IncidentWorld): string {
 function actionId(world: IncidentWorld): string {
   if (!world.actionId) throw new Error("Acceptance scenario has no proposed action");
   return encodeURIComponent(world.actionId);
+}
+
+function sessionCookie(world: IncidentWorld): string {
+  if (!world.sessionCookie) throw new Error("Expected a demo session");
+  return world.sessionCookie;
 }

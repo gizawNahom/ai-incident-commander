@@ -31,8 +31,8 @@ starts.
 ## Consequences
 
 The Incident Room can show a durable in-memory audit trail and safely reflect
-live action progress through SSE incident updates. The demo identity is
-`Engineer (demo)` until the later identity/RBAC slice. Direct simulator recovery
-remains a chaos/reset control outside this operational approval workflow; it is
-not the flagship mitigation path. Actions remain in memory until PostgreSQL is
-introduced.
+live action progress through SSE incident updates. Actor identity and
+per-incident command authority are specified by ADR 0012. Direct simulator
+recovery remains a chaos/reset control outside this operational approval
+workflow; it is not the flagship mitigation path. Actions remain in memory
+until PostgreSQL is introduced.

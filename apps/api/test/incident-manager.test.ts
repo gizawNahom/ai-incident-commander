@@ -246,7 +246,9 @@ test("retains a suggested rollback and records its explicit approval lifecycle",
   assert.equal(proposed?.status, "PROPOSED");
   assert.equal(proposed?.targetServiceId, "payment-service");
 
-  const approved = manager.approveAction("INC-1042", proposed?.id ?? "", "2026-08-13T12:01:02.000Z", "Engineer (demo)");
+  const engineer = { id: "maya-chen", name: "Maya Chen" };
+  manager.takeCommand("INC-1042", "2026-08-13T12:01:01.000Z", engineer);
+  const approved = manager.approveAction("INC-1042", proposed?.id ?? "", "2026-08-13T12:01:02.000Z", engineer);
   const executing = manager.beginActionExecution("INC-1042", approved.id, "2026-08-13T12:01:03.000Z");
   const completed = manager.completeAction("INC-1042", executing.id, "2026-08-13T12:01:04.000Z", "Rollback command accepted by the simulator.");
 
@@ -255,6 +257,51 @@ test("retains a suggested rollback and records its explicit approval lifecycle",
   assert.ok(timeline.some((event) => event.type === "ACTION_APPROVED"));
   assert.ok(timeline.some((event) => event.type === "ACTION_EXECUTED"));
   assert.ok(timeline.some((event) => event.type === "ACTION_COMPLETED"));
+});
+
+test("only the engineer commanding an incident can approve its mitigation", () => {
+  const simulator = new TelemetrySimulator({ seed: 1042, now: () => new Date("2026-08-13T12:00:00.000Z") });
+  const manager = new IncidentManager();
+  simulator.subscribe((event) => manager.observe(event));
+  simulator.triggerBadPaymentDeployment();
+  simulator.advance();
+  simulator.advance();
+  simulator.advance();
+
+  manager.recordInvestigation({
+    incidentId: "INC-1042",
+    timestamp: "2026-08-13T12:01:00.000Z",
+    hypothesis: "The deployment is the likely initiating event.",
+    suggestedAction: {
+      type: "ROLLBACK_DEPLOYMENT",
+      targetServiceId: "payment-service",
+      fromVersion: "v1.8.3",
+      toVersion: "v1.8.2",
+      reasoning: "The deployment immediately preceded the observed degradation.",
+      evidenceIds: ["evidence-deployment"],
+      risk: "medium",
+    },
+  });
+
+  manager.takeCommand("INC-1042", "2026-08-13T12:01:01.000Z", { id: "maya", name: "Maya Chen" });
+  const actionId = manager.find("INC-1042")?.actions[0]?.id ?? "";
+
+  assert.throws(
+    () => manager.approveAction("INC-1042", actionId, "2026-08-13T12:01:02.000Z", { id: "daniel", name: "Daniel Okafor" }),
+    /Incident Commander Maya Chen must approve this action/,
+  );
+
+  assert.throws(
+    () => manager.takeCommand("INC-1042", "2026-08-13T12:01:03.000Z", { id: "daniel", name: "Daniel Okafor" }),
+    /A takeover reason is required/,
+  );
+
+  manager.takeCommand("INC-1042", "2026-08-13T12:01:04.000Z", { id: "daniel", name: "Daniel Okafor" }, "Maya handed off after triage");
+  const approved = manager.approveAction("INC-1042", actionId, "2026-08-13T12:01:05.000Z", { id: "daniel", name: "Daniel Okafor" });
+  assert.equal(approved.status, "APPROVED");
+  assert.deepEqual(manager.find("INC-1042")?.commander, { id: "daniel", name: "Daniel Okafor", assignedAt: "2026-08-13T12:01:04.000Z" });
+  assert.ok(manager.find("INC-1042")?.timeline.some((event) => event.type === "INCIDENT_COMMAND_ASSIGNED"));
+  assert.ok(manager.find("INC-1042")?.timeline.some((event) => event.type === "INCIDENT_COMMAND_TRANSFERRED" && /Maya handed off after triage/.test(event.message)));
 });
 
 test("keeps independent incidents, monitors sustained recovery, and reopens only the matching unresolved incident", () => {
@@ -292,7 +339,9 @@ test("keeps independent incidents, monitors sustained recovery, and reopens only
   assert.equal(manager.find(billingIncident.id)?.status, "INVESTIGATING");
   assert.equal(manager.find(shippingIncident.id)?.status, "MONITORING");
 
-  manager.resolve(shippingIncident.id, "2026-08-13T12:00:09.000Z", "Engineer (demo)");
+  const engineer = { id: "maya-chen", name: "Maya Chen" };
+  manager.takeCommand(shippingIncident.id, "2026-08-13T12:00:09.000Z", engineer);
+  manager.resolve(shippingIncident.id, "2026-08-13T12:00:09.000Z", engineer);
   assert.equal(manager.find(shippingIncident.id)?.status, "RESOLVED");
   assert.ok(manager.find(shippingIncident.id)?.timeline.some((event) => event.type === "INCIDENT_RESOLVED"));
 });

@@ -25,9 +25,8 @@ the specification.
 5. **Human-approved simulated mitigation — completed.** The investigator’s
    rollback recommendation becomes a retained action with an explicit
    PROPOSED → APPROVED/REJECTED → EXECUTING → COMPLETED/FAILED lifecycle.
-   Only approval by the demo Engineer invokes the validated simulator rollback;
-   the Incident Room records the action’s version change, decision, outcome,
-   and timeline audit events.
+   Approval invokes the validated simulator rollback; the Incident Room records
+   the action’s version change, decision, outcome, and timeline audit events.
 6. **Services and Incident History — completed.** The application now exposes
    live service inventory/detail views and reviewable active/resolved incident
    records backed by simulator and preserved evidence read models.
@@ -36,10 +35,12 @@ the specification.
    Playwright browser driver. It verifies navigation, live updates, grounded
    analysis, explicit approval, recovery, resolution, and historical evidence.
    API-only transport-safety scenarios remain separate.
-8. **Run Demo Incident — next.** Add the deterministic one-click recruiter
+8. **Local identity and incident command — completed.** Two local Engineer
+   identities use server-owned demo sessions. An Engineer takes command of an
+   individual incident; only that assigned commander may approve a mitigation
+   or resolve it. The browser and API record the authenticated actor.
+9. **Run Demo Incident — next.** Add the deterministic one-click recruiter
    flow.
-9. **Simple Engineer/Admin identity.** Add credible lightweight RBAC before
-   expanding the set of operational mitigations.
 10. **PostgreSQL persistence.** Add durable storage only after the preceding
    product model and workflow have been validated.
 

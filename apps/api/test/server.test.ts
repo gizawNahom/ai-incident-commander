@@ -21,11 +21,78 @@ test("health endpoint returns an operational snapshot with a request id", async 
   }
 });
 
+test("a signed-in incident commander is required to approve a mitigation", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    const maya = await signIn(address, "maya-chen");
+    const daniel = await signIn(address, "daniel-okafor");
+
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+    await fetch(`${address}/api/incidents/INC-1042/investigate`, { method: "POST" });
+    const incident = await (await fetch(`${address}/api/incidents/INC-1042`)).json();
+    const actionId = incident.actions[0].id;
+
+    const unauthenticated = await fetch(`${address}/api/incidents/INC-1042/actions/${actionId}/approve`, { method: "POST" });
+    assert.equal(unauthenticated.status, 401);
+
+    const command = await fetch(`${address}/api/incidents/INC-1042/command`, {
+      method: "POST",
+      headers: { cookie: maya.cookie },
+    });
+    assert.equal(command.status, 200);
+    assert.equal((await command.json()).commander.name, "Maya Chen");
+
+    const denied = await fetch(`${address}/api/incidents/INC-1042/actions/${actionId}/approve`, {
+      method: "POST",
+      headers: { cookie: daniel.cookie },
+    });
+    assert.equal(denied.status, 403);
+    assert.match((await denied.json()).error, /Incident Commander Maya Chen/);
+
+    const takeover = await fetch(`${address}/api/incidents/INC-1042/command`, {
+      method: "POST",
+      headers: { cookie: daniel.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Maya handed off after triage" }),
+    });
+    assert.equal(takeover.status, 200);
+    const transferred = await takeover.json();
+    assert.equal(transferred.commander.name, "Daniel Okafor");
+    assert.ok(transferred.timeline.some((event: { type: string; message: string }) => event.type === "INCIDENT_COMMAND_TRANSFERRED" && /Maya handed off after triage/.test(event.message)));
+
+    const approved = await fetch(`${address}/api/incidents/INC-1042/actions/${actionId}/approve`, {
+      method: "POST",
+      headers: { cookie: daniel.cookie },
+    });
+    assert.equal(approved.status, 200);
+    assert.equal((await approved.json()).actions[0].status, "COMPLETED");
+  } finally {
+    await app.close();
+  }
+});
+
+async function signIn(address: string, userId: string): Promise<{ readonly cookie: string }> {
+  const response = await fetch(`${address}/api/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  assert.equal(response.status, 201);
+  const cookie = response.headers.get("set-cookie");
+  assert.ok(cookie, "Expected a session cookie");
+  return { cookie };
+}
+
 test("an engineer can resolve a monitored incident through the API", async () => {
   const app = createServer({ autoStart: false });
   const address = await app.listen();
 
   try {
+    const maya = await signIn(address, "maya-chen");
     await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
     app.advance();
     app.advance();
@@ -37,7 +104,10 @@ test("an engineer can resolve a monitored incident through the API", async () =>
     const monitoring = await (await fetch(`${address}/api/incidents/INC-1042`)).json();
     assert.equal(monitoring.status, "MONITORING");
 
-    const resolveResponse = await fetch(`${address}/api/incidents/INC-1042/resolve`, { method: "POST" });
+    const command = await fetch(`${address}/api/incidents/INC-1042/command`, { method: "POST", headers: { cookie: maya.cookie } });
+    assert.equal(command.status, 200);
+
+    const resolveResponse = await fetch(`${address}/api/incidents/INC-1042/resolve`, { method: "POST", headers: { cookie: maya.cookie } });
     const resolved = await resolveResponse.json();
     assert.equal(resolveResponse.status, 200);
     assert.equal(resolved.status, "RESOLVED");
@@ -53,6 +123,7 @@ test("an engineer approval is required before the API starts a proposed rollback
   const address = await app.listen();
 
   try {
+    const maya = await signIn(address, "maya-chen");
     await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
     app.advance();
     app.advance();
@@ -66,7 +137,10 @@ test("an engineer approval is required before the API starts a proposed rollback
     const directExecution = await fetch(`${address}/api/incidents/INC-1042/actions/${action.id}/execute`, { method: "POST" });
     assert.equal(directExecution.status, 409);
 
-    const approvalResponse = await fetch(`${address}/api/incidents/INC-1042/actions/${action.id}/approve`, { method: "POST" });
+    const command = await fetch(`${address}/api/incidents/INC-1042/command`, { method: "POST", headers: { cookie: maya.cookie } });
+    assert.equal(command.status, 200);
+
+    const approvalResponse = await fetch(`${address}/api/incidents/INC-1042/actions/${action.id}/approve`, { method: "POST", headers: { cookie: maya.cookie } });
     const approved = await approvalResponse.json();
     assert.equal(approvalResponse.status, 200);
     assert.equal(approved.actions[0].status, "COMPLETED");

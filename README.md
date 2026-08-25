@@ -92,6 +92,10 @@ npm test
 npm run check
 ```
 
+GitHub Actions runs those same checks on every pull request to `main` and every
+push to `main`, including Chromium-backed browser coverage. A failed browser
+journey retains its screenshot as a short-lived workflow artifact.
+
 - Unit and integration tests cover domain transitions, simulator behavior, correlation, transport safety, and investigator validation.
 - Gherkin acceptance tests describe business behavior and run against a fast API adapter.
 - The flagship scenario runs again through Playwright, using visible browser controls and live UI assertions. Failures retain a screenshot under `/tmp`.

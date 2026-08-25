@@ -39,9 +39,13 @@ the specification.
    identities use server-owned demo sessions. An Engineer takes command of an
    individual incident; only that assigned commander may approve a mitigation
    or resolve it. The browser and API record the authenticated actor.
-9. **Run Demo Incident — next.** Add the deterministic one-click recruiter
-   flow.
-10. **PostgreSQL persistence.** Add durable storage only after the preceding
+9. **Portfolio readiness — completed.** The Command Center now makes the
+   simulator-only story immediately discoverable, the UI has deliberate
+   feedback and keyboard-focus states, and the README documents the real
+   product, architecture, local workflow, test strategy, and captured screens.
+10. **Run Demo Incident — next.** Add the deterministic one-click recruiter
+    flow.
+11. **PostgreSQL persistence.** Add durable storage only after the preceding
    product model and workflow have been validated.
 
 ## Simulator boundary note

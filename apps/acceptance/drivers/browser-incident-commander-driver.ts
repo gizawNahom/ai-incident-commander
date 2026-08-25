@@ -43,6 +43,12 @@ export class BrowserIncidentCommanderDriver implements IncidentCommanderDriver {
     assert.equal((await health.textContent())?.trim(), "Healthy");
   }
 
+  async assertSafeScenarioGuidance(): Promise<void> {
+    await this.pageValue().getByRole("heading", { name: "Try the incident story" }).waitFor({ state: "visible" });
+    await this.pageValue().getByRole("button", { name: "Start with a bad deployment" }).waitFor({ state: "visible" });
+    assert.equal(await this.pageValue().locator("#detection-panel").isHidden(), true);
+  }
+
   async deployDefectivePaymentVersion(): Promise<void> {
     await this.pageValue().getByRole("button", { name: "Deploy bad payment version" }).click();
   }

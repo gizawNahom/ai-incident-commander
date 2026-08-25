@@ -55,7 +55,8 @@ function showError(message) {
 
 function renderIncident(nextIncident) {
   incident = nextIncident;
-  elements.header.innerHTML = `<p class="eyebrow">Incident room / live investigation</p><h1>${incident.id} — ${incident.title}</h1><p>Preserved incident evidence is separate from the current system state.</p><p id="room-live-state">Connecting to live system state…</p>`;
+  elements.error.hidden = true;
+  elements.header.innerHTML = `<p class="eyebrow">Incident room / live investigation</p><h1>${incident.id} — ${incident.title}</h1><p>Preserved incident evidence is separate from the current system state.</p><p id="room-live-state" role="status">Connecting to live system state…</p>`;
   elements.liveState = document.getElementById("room-live-state");
   elements.severity.textContent = incident.severity;
   elements.status.textContent = incident.status;

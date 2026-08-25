@@ -12,9 +12,9 @@
       <header class="room-header" id="room-header">
         <p class="eyebrow">Incident room / live investigation</p>
         <h1>Loading incident…</h1>
-        <p id="room-live-state">Connecting to live system state…</p>
+        <p id="room-live-state" role="status">Connecting to live system state…</p>
       </header>
-      <p class="room-error" id="room-error" hidden></p>
+      <p class="room-error" id="room-error" role="alert" hidden></p>
 
       <section class="room-summary" id="room-summary" hidden>
         <div><span>Severity</span><strong id="room-severity">—</strong></div>
@@ -48,7 +48,7 @@
           <div><p class="eyebrow">AI Investigator</p><h2>Evidence-grounded analysis</h2></div>
           <div class="room-actions"><button class="button investigator-button" id="investigate-button" type="button">Analyze incident</button><button class="button resolve-button" id="resolve-incident" type="button" hidden>Resolve incident</button></div>
         </div>
-        <p class="investigator-intro">Uses the incident timeline, alert evidence, metrics, logs, and topology. It can propose a mitigation; it cannot execute one.</p>
+        <p class="investigator-intro">Uses preserved incident timeline, alert evidence, metrics, logs, and topology. Every conclusion distinguishes evidence from inference. It can propose a mitigation; it cannot execute one.</p>
         <div class="investigation-result" id="investigation-result" hidden></div>
       </section>
 

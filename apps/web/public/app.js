@@ -10,6 +10,7 @@ const elements = {
   detectionAlerts: byId("detection-alerts"),
   detectionMessage: byId("detection-message"),
   detectionPanel: byId("detection-panel"),
+  overviewError: byId("overview-error"),
   eventCount: byId("event-count"),
   eventList: byId("event-list"),
   focus: byId("service-focus"),
@@ -41,6 +42,7 @@ const elements = {
   scenario: byId("scenario-badge"),
   serviceGrid: byId("service-grid"),
   stream: byId("stream-status"),
+  startBadDeployment: byId("start-bad-deployment"),
   trigger: byId("trigger-deployment"),
   triggerKafka: byId("trigger-kafka-backlog"),
   triggerOutage: byId("trigger-service-outage"),
@@ -74,6 +76,7 @@ function scenarioCopy(name) {
 
 function renderSystem(nextSystem) {
   system = nextSystem;
+  elements.overviewError.hidden = true;
   if (!getService(selectedServiceId)) selectedServiceId = system.services[0]?.id;
   const payment = getService("payment-service");
   const checkout = getService("checkout-service");
@@ -215,7 +218,7 @@ function renderIncidentCard(incident) {
 }
 
 function renderDetectionStatus(status) {
-  const waiting = status.state === "WAITING_FOR_CORRELATED_EVIDENCE" && !incidents.some((incident) => incident.status !== "RESOLVED");
+  const waiting = status.state === "WAITING_FOR_CORRELATED_EVIDENCE" && status.activeAlerts.length > 0 && !incidents.some((incident) => incident.status !== "RESOLVED");
   elements.detectionPanel.hidden = !waiting;
   if (!waiting) return;
   elements.detectionMessage.textContent = status.message;
@@ -424,6 +427,8 @@ async function sendControl(control, button) {
     });
     if (!response.ok) throw new Error("Control request failed");
   } catch (error) {
+    elements.overviewError.hidden = false;
+    elements.overviewError.textContent = error instanceof Error ? error.message : "The simulator control could not be completed.";
     addEvent({ type: "log", timestamp: new Date().toISOString(), level: "error", message: error instanceof Error ? error.message : "Control request failed" });
   } finally {
     button.disabled = false;
@@ -431,6 +436,7 @@ async function sendControl(control, button) {
 }
 
 elements.trigger.addEventListener("click", () => sendControl(scenarioControl("bad-payment-deployment"), elements.trigger));
+elements.startBadDeployment.addEventListener("click", () => sendControl(scenarioControl("bad-payment-deployment"), elements.startBadDeployment));
 elements.triggerRedis.addEventListener("click", () => sendControl(scenarioControl("redis-degradation"), elements.triggerRedis));
 elements.triggerKafka.addEventListener("click", () => sendControl(scenarioControl("kafka-backlog"), elements.triggerKafka));
 elements.triggerOutage.addEventListener("click", () => sendControl(serviceOutageRequest(elements.outageTarget.value), elements.triggerOutage));
@@ -440,7 +446,15 @@ elements.cancelPolicy.addEventListener("click", closePolicyForm);
 elements.policyScope.addEventListener("change", syncScopeSelector);
 elements.policyForm.addEventListener("submit", savePolicy);
 
-fetch("/api/system").then((response) => response.json()).then(renderSystem).catch(() => { elements.description.textContent = "Unable to load the simulator snapshot."; });
+fetch("/api/system").then((response) => {
+  if (!response.ok) throw new Error("Unable to load the simulator snapshot.");
+  return response.json();
+}).then(renderSystem).catch((error) => {
+  const message = error instanceof Error ? error.message : "Unable to load the simulator snapshot.";
+  elements.description.textContent = message;
+  elements.overviewError.hidden = false;
+  elements.overviewError.textContent = `${message} Check that the application server is running, then refresh.`;
+});
 fetch("/api/incidents").then((response) => response.json()).then((payload) => renderIncidents(payload.incidents)).catch(() => renderIncidents([]));
 refreshDetectionStatus();
 fetch("/api/alert-policies").then((response) => response.json()).then((payload) => renderPolicies(payload.policies)).catch(() => {

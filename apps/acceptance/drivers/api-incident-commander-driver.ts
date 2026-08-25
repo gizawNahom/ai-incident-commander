@@ -57,6 +57,12 @@ export class ApiIncidentCommanderDriver implements IncidentCommanderDriver {
     assert.ok(system.services.every((service) => service.health === "healthy"));
   }
 
+  async assertSafeScenarioGuidance(): Promise<void> {
+    const response = await fetch(`${this.baseUrl()}/`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Start with a bad deployment/);
+  }
+
   async deployDefectivePaymentVersion(): Promise<void> {
     await this.post("/api/simulator/bad-payment-deployment");
     this.advance(3);

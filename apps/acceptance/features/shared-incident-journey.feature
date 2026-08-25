@@ -5,6 +5,7 @@ Feature: Engineer responds to a defective deployment
 
   Scenario: Engineer investigates, mitigates, and reviews a payment release incident
     Given the engineer opens a healthy Command Center
+    Then the Command Center explains how to start a safe incident scenario
     When the engineer deploys the defective payment version
     Then a checkout degradation incident appears in the overview
 

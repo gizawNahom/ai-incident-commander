@@ -23,6 +23,10 @@ Given("the engineer opens a healthy Command Center", async function (this: Share
   await driver(this).openHealthyCommandCenter();
 });
 
+Then("the Command Center explains how to start a safe incident scenario", async function (this: SharedJourneyWorld) {
+  await driver(this).assertSafeScenarioGuidance();
+});
+
 When("the engineer deploys the defective payment version", async function (this: SharedJourneyWorld) {
   await driver(this).deployDefectivePaymentVersion();
 });

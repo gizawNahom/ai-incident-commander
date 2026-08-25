@@ -2,6 +2,7 @@ export interface IncidentCommanderDriver {
   start(): Promise<void>;
   stop(options: { readonly failed: boolean }): Promise<void>;
   openHealthyCommandCenter(): Promise<void>;
+  assertSafeScenarioGuidance(): Promise<void>;
   deployDefectivePaymentVersion(): Promise<void>;
   assertCheckoutDegradationIncident(): Promise<void>;
   openPaymentService(): Promise<void>;

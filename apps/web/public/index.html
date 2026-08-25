@@ -25,6 +25,19 @@
         <div><span>Event stream</span><strong id="stream-status">Connecting</strong></div>
       </section>
 
+      <section class="demo-guide" aria-labelledby="demo-guide-title">
+        <div>
+          <p class="eyebrow">First time here?</p>
+          <h2 id="demo-guide-title">Try the incident story</h2>
+          <p>Start a deterministic, simulator-only failure. Watch live telemetry degrade, follow the incident into its evidence room, then approve a simulated rollback as the assigned Incident Commander.</p>
+        </div>
+        <div class="demo-guide-actions">
+          <ol aria-label="Incident story steps"><li>Trigger a defective release</li><li>Inspect correlated evidence</li><li>Approve a human-controlled rollback</li></ol>
+          <button class="button demo-start" id="start-bad-deployment" type="button">Start with a bad deployment <span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+      <p class="overview-error" id="overview-error" role="alert" hidden></p>
+
       <section class="control-deck" aria-labelledby="chaos-title">
         <div><p class="eyebrow" id="chaos-title">Simulation controls</p><p>Trigger independent, evidence-rich failure scenarios without affecting real infrastructure.</p></div>
         <div class="controls">

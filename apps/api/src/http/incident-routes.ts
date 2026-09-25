@@ -1,5 +1,5 @@
 import type { TelemetrySimulator } from "../simulator.ts";
-import { IncidentResolutionError, type IncidentManager } from "../incident-manager.ts";
+import { IncidentResolutionError, type IncidentManager, type SuggestedActionRecommendation } from "../incident-manager.ts";
 import type { DemoSessionStore } from "../demo-session-store.ts";
 import type { DeterministicInvestigator, IncidentInvestigator, Investigation } from "../../../../packages/ai/src/deterministic-investigator.ts";
 import { isRecord, json, log, readJson, requireDemoUser, sendError, type Route } from "./http-kit.ts";
@@ -81,7 +81,7 @@ export function incidentRoutes({ simulator, incidentManager, sessions, investiga
             incidentId,
             timestamp: simulator.snapshot().timestamp,
             hypothesis: analysis.hypotheses[0]?.inference ?? "No hypothesis could be generated from the available evidence.",
-            suggestedAction: analysis.suggestedAction,
+            suggestedAction: recommendationFrom(analysis),
           });
           json(context.response, 200, analysis);
         },
@@ -119,6 +119,21 @@ export function incidentRoutes({ simulator, incidentManager, sessions, investiga
       },
     },
   ];
+}
+
+// The recorded action keeps the investigator's rationale and cites the evidence behind the leading hypothesis.
+function recommendationFrom(analysis: Investigation): SuggestedActionRecommendation | undefined {
+  const proposal = analysis.suggestedAction;
+  if (!proposal) return undefined;
+  return {
+    type: proposal.type,
+    targetServiceId: proposal.targetServiceId,
+    fromVersion: proposal.fromVersion,
+    toVersion: proposal.toVersion,
+    reasoning: proposal.rationale,
+    evidenceIds: analysis.hypotheses[0]?.evidenceIds ?? [],
+    risk: proposal.risk,
+  };
 }
 
 function isIncidentStatus(value: string | null): value is "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED" | null {

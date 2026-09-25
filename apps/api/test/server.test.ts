@@ -456,7 +456,7 @@ test("the investigator receives the preserved incident context instead of every 
     assert.equal(response.status, 200);
     assert.ok(receivedContext?.services.some((service) => service.id === "redis"));
     assert.equal(receivedContext?.services.some((service) => service.id === "notification-service"), false);
-    assert.ok(receivedContext?.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs > 1_000)));
+    assert.ok(receivedContext?.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => (sample.latencyMs ?? 0) > 1_000)));
   } finally {
     await app.close();
   }
@@ -490,6 +490,31 @@ test("investigation endpoint returns grounded evidence and only proposes a mitig
       rationale: "The deployment immediately preceded the observed degradation.",
     });
     assert.equal(system.scenario, "bad-payment-deployment");
+  } finally {
+    await app.close();
+  }
+});
+
+test("a proposed mitigation records the investigator's reasoning and the evidence it cites", async () => {
+  const app = createServer({ autoStart: false });
+  const address = await app.listen();
+
+  try {
+    await fetch(`${address}/api/simulator/bad-payment-deployment`, { method: "POST" });
+    app.advance();
+    app.advance();
+    app.advance();
+
+    const analysis = await (await fetch(`${address}/api/incidents/INC-1042/investigate`, { method: "POST" })).json();
+    const incident = await (await fetch(`${address}/api/incidents/INC-1042`)).json();
+    const action = incident.actions[0];
+    const knownEvidenceIds = analysis.knownEvidence.map((evidence: { id: string }) => evidence.id);
+    const deploymentEvidence = analysis.knownEvidence.find((evidence: { kind: string }) => evidence.kind === "deployment");
+
+    assert.equal(action.reasoning, analysis.suggestedAction.rationale);
+    assert.ok(action.evidenceIds.length > 0, "Expected the action to cite evidence");
+    assert.ok(action.evidenceIds.every((id: string) => knownEvidenceIds.includes(id)), "Expected only stored evidence to be cited");
+    assert.ok(action.evidenceIds.includes(deploymentEvidence.id), "Expected the initiating deployment to be cited");
   } finally {
     await app.close();
   }

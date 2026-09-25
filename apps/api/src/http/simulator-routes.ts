@@ -1,6 +1,5 @@
-import type { ServiceId, TelemetrySimulator } from "../simulator.ts";
+import { isServiceId, type ServiceId, type TelemetrySimulator } from "../simulator.ts";
 import { isRecord, json, readJson, sendError, type Route } from "./http-kit.ts";
-import { isServiceId } from "./telemetry-routes.ts";
 
 export function simulatorRoutes(simulator: TelemetrySimulator): readonly Route[] {
   return [

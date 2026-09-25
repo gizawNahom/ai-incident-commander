@@ -1,18 +1,18 @@
-import type { TelemetrySimulator } from "../simulator.ts";
-import { IncidentResolutionError, type IncidentManager, type SuggestedActionRecommendation } from "../incident-manager.ts";
+import type { IncidentManager } from "../incident-manager.ts";
 import type { DemoSessionStore } from "../demo-session-store.ts";
-import type { DeterministicInvestigator, IncidentInvestigator, Investigation } from "../../../../packages/ai/src/deterministic-investigator.ts";
-import { isRecord, json, log, readJson, requireDemoUser, sendError, type Route } from "./http-kit.ts";
+import type { IncidentInvestigation } from "../incidents/incident-investigation.ts";
+import type { Clock } from "../incidents/ports.ts";
+import { isRecord, json, log, readJson, RequestBodyError, requireDemoUser, sendError, type Route } from "./http-kit.ts";
+import { sendOperationError } from "./operation-errors.ts";
 
 type IncidentRouteDependencies = {
-  readonly simulator: TelemetrySimulator;
   readonly incidentManager: IncidentManager;
+  readonly investigation: IncidentInvestigation;
   readonly sessions: DemoSessionStore;
-  readonly investigator: IncidentInvestigator;
-  readonly deterministicInvestigator: DeterministicInvestigator;
+  readonly clock: Clock;
 };
 
-export function incidentRoutes({ simulator, incidentManager, sessions, investigator, deterministicInvestigator }: IncidentRouteDependencies): readonly Route[] {
+export function incidentRoutes({ incidentManager, investigation, sessions, clock }: IncidentRouteDependencies): readonly Route[] {
   return [
     {
       pattern: /^\/api\/incidents$/,
@@ -55,35 +55,14 @@ export function incidentRoutes({ simulator, incidentManager, sessions, investiga
       pattern: /^\/api\/incidents\/([^/]+)\/investigate$/,
       handle: {
         POST: async (context, [incidentId = ""]) => {
-          const incident = incidentManager.find(incidentId);
-          if (!incident) {
-            sendError(context, 404, "Incident not found");
-            return;
-          }
-          const evidence = incidentManager.evidenceFor(incidentId);
-          if (!evidence) {
-            sendError(context, 409, "Incident evidence is not available");
-            return;
-          }
-          const investigationContext = {
-            incident: { ...incident, timeline: incident.timeline.filter(isInvestigationTimelineEvent) },
-            services: evidence.topology,
-            metricHistories: evidence.metricHistories,
-          };
-          let analysis: Investigation;
           try {
-            analysis = await investigator.investigate(investigationContext);
-          } catch {
-            log("investigation_provider_fallback", { requestId: context.requestId, reason: "provider_unavailable" });
-            analysis = { ...deterministicInvestigator.investigate(investigationContext), fallbackReason: "AI provider unavailable; offline evidence analysis shown." };
+            const analysis = await investigation.investigate(incidentId, {
+              onProviderFallback: () => log("investigation_provider_fallback", { requestId: context.requestId, reason: "provider_unavailable" }),
+            });
+            json(context.response, 200, analysis);
+          } catch (error) {
+            sendOperationError(context, error, "Unable to investigate incident");
           }
-          incidentManager.recordInvestigation({
-            incidentId,
-            timestamp: simulator.snapshot().timestamp,
-            hypothesis: analysis.hypotheses[0]?.inference ?? "No hypothesis could be generated from the available evidence.",
-            suggestedAction: recommendationFrom(analysis),
-          });
-          json(context.response, 200, analysis);
         },
       },
     },
@@ -94,10 +73,9 @@ export function incidentRoutes({ simulator, incidentManager, sessions, investiga
           const actor = requireDemoUser(context, sessions);
           if (!actor) return;
           try {
-            json(context.response, 200, incidentManager.resolve(incidentId, simulator.snapshot().timestamp, actor));
+            json(context.response, 200, incidentManager.resolve(incidentId, clock.now(), actor));
           } catch (error) {
-            const status = error instanceof IncidentResolutionError && error.message === "Incident not found" ? 404 : error instanceof IncidentResolutionError && /Incident Commander/.test(error.message) ? 403 : 409;
-            sendError(context, status, error instanceof Error ? error.message : "Unable to resolve incident");
+            sendOperationError(context, error, "Unable to resolve incident");
           }
         },
       },
@@ -110,30 +88,14 @@ export function incidentRoutes({ simulator, incidentManager, sessions, investiga
           if (!actor) return;
           try {
             const takeoverReason = context.request.headers["content-type"]?.includes("application/json") ? commandTakeoverReason(await readJson(context.request)) : undefined;
-            json(context.response, 200, incidentManager.takeCommand(incidentId, simulator.snapshot().timestamp, actor, takeoverReason));
+            json(context.response, 200, incidentManager.takeCommand(incidentId, clock.now(), actor, takeoverReason));
           } catch (error) {
-            const message = error instanceof Error ? error.message : "Unable to take incident command";
-            sendError(context, message === "Incident not found" ? 404 : 409, message);
+            sendOperationError(context, error, "Unable to take incident command");
           }
         },
       },
     },
   ];
-}
-
-// The recorded action keeps the investigator's rationale and cites the evidence behind the leading hypothesis.
-function recommendationFrom(analysis: Investigation): SuggestedActionRecommendation | undefined {
-  const proposal = analysis.suggestedAction;
-  if (!proposal) return undefined;
-  return {
-    type: proposal.type,
-    targetServiceId: proposal.targetServiceId,
-    fromVersion: proposal.fromVersion,
-    toVersion: proposal.toVersion,
-    reasoning: proposal.rationale,
-    evidenceIds: analysis.hypotheses[0]?.evidenceIds ?? [],
-    risk: proposal.risk,
-  };
 }
 
 function isIncidentStatus(value: string | null): value is "DETECTED" | "INVESTIGATING" | "MONITORING" | "RESOLVED" | null {
@@ -144,11 +106,7 @@ function isIncidentSeverity(value: string | null): value is "SEV-1" | "SEV-2" | 
   return value === null || value === "SEV-1" || value === "SEV-2" || value === "SEV-3" || value === "SEV-4";
 }
 
-function isInvestigationTimelineEvent(event: { readonly type: string }): event is { readonly type: "DEPLOYMENT" | "LOG" | "ALERT_TRIGGERED" | "INCIDENT_CREATED"; readonly timestamp: string; readonly message: string; readonly serviceId?: string; readonly version?: string; readonly previousVersion?: string; readonly deploymentKind?: "RELEASE" | "ROLLBACK" } {
-  return event.type === "DEPLOYMENT" || event.type === "LOG" || event.type === "ALERT_TRIGGERED" || event.type === "INCIDENT_CREATED";
-}
-
 function commandTakeoverReason(value: unknown): string {
-  if (!isRecord(value) || typeof value.reason !== "string") throw new Error("A takeover reason must be text");
+  if (!isRecord(value) || typeof value.reason !== "string") throw new RequestBodyError("A takeover reason must be text");
   return value.reason;
 }

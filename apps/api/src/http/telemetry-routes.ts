@@ -1,4 +1,4 @@
-import { serviceIds, type ServiceId, type TelemetrySimulator } from "../simulator.ts";
+import { isServiceId, type TelemetrySimulator } from "../simulator.ts";
 import type { IncidentManager } from "../incident-manager.ts";
 import { json, sendError, type Route } from "./http-kit.ts";
 
@@ -32,8 +32,4 @@ export function telemetryRoutes(simulator: TelemetrySimulator, incidentManager: 
       handle: ({ response }) => json(response, 200, incidentManager.detectionStatus()),
     },
   ];
-}
-
-export function isServiceId(value: string | null): value is ServiceId {
-  return value !== null && serviceIds.includes(value as ServiceId);
 }

@@ -11,6 +11,11 @@ export const serviceIds = [
 ] as const;
 
 export type ServiceId = (typeof serviceIds)[number];
+
+export function isServiceId(value: string | null): value is ServiceId {
+  return value !== null && serviceIds.includes(value as ServiceId);
+}
+
 export type ServiceHealth = "healthy" | "degraded" | "critical";
 export type ScenarioName = "healthy" | "bad-payment-deployment" | "redis-degradation" | "kafka-backlog" | "service-outage" | "recovering";
 type FailureScenario = Exclude<ScenarioName, "healthy" | "recovering">;

@@ -100,9 +100,22 @@ export type DetectionStatus = {
   readonly activeAlerts: readonly Alert[];
 };
 
-export class IncidentResolutionError extends Error {}
-export class IncidentActionError extends Error {}
-export class IncidentCommandAssignmentError extends Error {}
+// Why an incident operation was refused: the target is missing, the actor lacks
+// incident command, or the incident or action is in the wrong state.
+export type IncidentFailureKind = "not-found" | "forbidden" | "conflict";
+
+export class IncidentOperationError extends Error {
+  readonly kind: IncidentFailureKind;
+
+  constructor(kind: IncidentFailureKind, message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
+export class IncidentResolutionError extends IncidentOperationError {}
+export class IncidentActionError extends IncidentOperationError {}
+export class IncidentCommandAssignmentError extends IncidentOperationError {}
 
 type ObservedService = {
   readonly id: string;
@@ -230,11 +243,11 @@ export class IncidentManager {
 
   takeCommand(incidentId: string, timestamp: string, actor: IncidentActor, takeoverReason?: string): DetectedIncident {
     const record = this.records.get(incidentId);
-    if (!record) throw new IncidentCommandAssignmentError("Incident not found");
-    if (record.incident.status === "RESOLVED") throw new IncidentCommandAssignmentError("A resolved incident cannot accept an Incident Commander");
+    if (!record) throw new IncidentCommandAssignmentError("not-found", "Incident not found");
+    if (record.incident.status === "RESOLVED") throw new IncidentCommandAssignmentError("conflict", "A resolved incident cannot accept an Incident Commander");
     try {
       if (record.incident.commander && record.incident.commander.id !== actor.id) {
-        if (!takeoverReason || takeoverReason.trim().length === 0) throw new IncidentCommandAssignmentError("A takeover reason is required to replace the current Incident Commander");
+        if (!takeoverReason || takeoverReason.trim().length === 0) throw new IncidentCommandAssignmentError("conflict", "A takeover reason is required to replace the current Incident Commander");
         const previousCommander = record.incident.commander;
         const commander: IncidentCommander = { ...actor, assignedAt: timestamp };
         const incident: DetectedIncident = {
@@ -260,7 +273,7 @@ export class IncidentManager {
       this.updateRecord(incidentId, { ...record, incident });
       return incident;
     } catch (error) {
-      if (error instanceof IncidentCommandError) throw new IncidentCommandAssignmentError(error.message);
+      if (error instanceof IncidentCommandError) throw new IncidentCommandAssignmentError("conflict", error.message);
       throw error;
     }
   }
@@ -323,12 +336,12 @@ export class IncidentManager {
 
   resolve(incidentId: string, timestamp: string, actor: IncidentActor): DetectedIncident {
     const record = this.records.get(incidentId);
-    if (!record) throw new IncidentResolutionError("Incident not found");
-    if (record.incident.status !== "MONITORING") throw new IncidentResolutionError("Only an incident in monitoring can be resolved");
+    if (!record) throw new IncidentResolutionError("not-found", "Incident not found");
+    if (record.incident.status !== "MONITORING") throw new IncidentResolutionError("conflict", "Only an incident in monitoring can be resolved");
     try {
       requireIncidentCommander(record.incident.commander, actor);
     } catch (error) {
-      throw new IncidentResolutionError(error instanceof Error ? error.message : "Incident command is required");
+      throw new IncidentResolutionError("forbidden", error instanceof Error ? error.message : "Incident command is required");
     }
     const incident: DetectedIncident = {
       ...record.incident,
@@ -595,10 +608,10 @@ export class IncidentManager {
 
   private actionRecord(incidentId: string, actionId: string): { readonly record: IncidentRecord; readonly action: SuggestedAction } {
     const record = this.records.get(incidentId);
-    if (!record) throw new IncidentActionError("Incident not found");
-    if (record.incident.status === "RESOLVED") throw new IncidentActionError("A resolved incident cannot accept a mitigation decision");
+    if (!record) throw new IncidentActionError("not-found", "Incident not found");
+    if (record.incident.status === "RESOLVED") throw new IncidentActionError("conflict", "A resolved incident cannot accept a mitigation decision");
     const action = record.incident.actions.find((candidate) => candidate.id === actionId);
-    if (!action) throw new IncidentActionError("Suggested action not found");
+    if (!action) throw new IncidentActionError("not-found", "Suggested action not found");
     return { record, action };
   }
 
@@ -680,7 +693,7 @@ function pushBounded<T>(items: T[], item: T, maximum: number, preservedOpeningIt
 
 function actionError(error: unknown): IncidentActionError {
   if (error instanceof IncidentActionError) return error;
-  if (error instanceof ActionTransitionError) return new IncidentActionError(error.message);
-  if (error instanceof IncidentCommandError) return new IncidentActionError(error.message);
-  return new IncidentActionError("Unable to update suggested action");
+  if (error instanceof ActionTransitionError) return new IncidentActionError("conflict", error.message);
+  if (error instanceof IncidentCommandError) return new IncidentActionError("forbidden", error.message);
+  return new IncidentActionError("conflict", "Unable to update suggested action");
 }

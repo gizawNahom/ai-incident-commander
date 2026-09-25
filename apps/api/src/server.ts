@@ -1,11 +1,14 @@
 import { createServer as createHttpServer, type Server } from "node:http";
 
-import { serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
+import { isServiceId, serviceIds, TelemetrySimulator, type ServiceId, type SimulatorEvent, type TelemetrySample } from "./simulator.ts";
 import { IncidentManager, type IncidentEvent } from "./incident-manager.ts";
 import { AlertPolicyStore } from "./alert-policy-store.ts";
 import { DemoSessionStore } from "./demo-session-store.ts";
 import { DeterministicInvestigator, type IncidentInvestigator } from "../../../packages/ai/src/deterministic-investigator.ts";
 import { GeminiGenerateContentTransport, GeminiInvestigator } from "../../../packages/ai/src/gemini-investigator.ts";
+import { IncidentInvestigation } from "./incidents/incident-investigation.ts";
+import { SuggestedActionDecisions } from "./incidents/suggested-action-decisions.ts";
+import type { Clock, MitigationExecutor } from "./incidents/ports.ts";
 import { log } from "./http/http-kit.ts";
 import { createRouter } from "./http/router.ts";
 import { EventStream } from "./http/event-stream.ts";
@@ -47,13 +50,17 @@ export function createServer(options: AppOptions = {}): RunningApp {
   incidentManager.observe({ type: "system", system: simulator.snapshot() });
   let interval: NodeJS.Timeout | undefined;
 
+  const clock: Clock = { now: () => simulator.snapshot().timestamp };
+  const investigation = new IncidentInvestigation({ incidents: incidentManager, investigator, fallbackInvestigator: deterministicInvestigator, clock });
+  const decisions = new SuggestedActionDecisions({ incidents: incidentManager, mitigations: simulatorMitigations(simulator), clock });
+
   const router = createRouter([
     ...telemetryRoutes(simulator, incidentManager),
     ...sessionRoutes(sessions),
     ...serviceRoutes(simulator, incidentManager),
     ...alertPolicyRoutes(alertPolicies, incidentManager),
-    ...incidentRoutes({ simulator, incidentManager, sessions, investigator, deterministicInvestigator }),
-    ...actionRoutes(simulator, incidentManager, sessions),
+    ...incidentRoutes({ incidentManager, investigation, sessions, clock }),
+    ...actionRoutes(decisions, sessions),
     ...simulatorRoutes(simulator),
     events.route(),
   ], serveStaticAsset);
@@ -79,6 +86,15 @@ export function createServer(options: AppOptions = {}): RunningApp {
       events.closeAll();
       httpServer.close((error) => error ? reject(error) : resolve());
     }),
+  };
+}
+
+// The simulator is the only mitigation target today; a service outside its topology cannot be rolled back.
+function simulatorMitigations(simulator: TelemetrySimulator): MitigationExecutor {
+  return {
+    rollbackDeployment: ({ serviceId, fromVersion, toVersion }) => isServiceId(serviceId)
+      ? simulator.rollbackDeployment({ serviceId, fromVersion, toVersion })
+      : { ok: false, message: `${serviceId} is not a simulated service` },
   };
 }
 

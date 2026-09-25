@@ -35,6 +35,19 @@ module (`session`, `telemetry`, `service`, `alert-policy`, `incident`,
 `action`, `simulator`), with SSE fan-out in `event-stream.ts` and the
 allow-listed web client in `static-assets.ts`.
 
+Route handlers parse input and map outcomes to HTTP; multi-step incident
+workflows live in use cases under `incidents/`. `SuggestedActionDecisions` is
+the only path to an operational change: it records the Incident Commander's
+approval, starts execution, calls the `MitigationExecutor` port, and records
+completion or failure (including an executor error) in the audit timeline.
+`IncidentInvestigation` builds the investigator context from preserved
+evidence, falls back to the deterministic investigator, and records the
+hypothesis and proposed action with its evidence citations. Use cases read
+simulated time through a `Clock` port; the composition root adapts the
+simulator to both ports. Incident operations fail with an
+`IncidentOperationError` whose kind (`not-found`, `forbidden`, `conflict`)
+the HTTP adapter maps to 404, 403, or 409.
+
 ## Domain model
 
 `Incident` is the lifecycle owner: DETECTED → INVESTIGATING → IDENTIFIED → MITIGATING → MONITORING → RESOLVED. It records affected services, alerts, timeline events, hypotheses, actions, and audit events.

@@ -36,8 +36,8 @@ export type InvestigationContext = {
     readonly serviceId: string;
     readonly samples: readonly {
       readonly timestamp: string;
-      readonly latencyMs: number;
-      readonly errorRate: number;
+      readonly latencyMs?: number;
+      readonly errorRate?: number;
     }[];
   }[];
 };
@@ -120,7 +120,7 @@ export class DeterministicInvestigator implements IncidentInvestigator {
       uncertainty: deployment
         ? "The evidence establishes timing and correlation, but correlation does not prove the deployment caused the degradation."
         : "No relevant deployment is present in the available incident evidence, so the initiating cause remains unconfirmed.",
-      suggestedAction: deployment?.version && deployment.previousVersion
+      suggestedAction: deployment?.serviceId && deployment.version && deployment.previousVersion
         ? {
             type: "ROLLBACK_DEPLOYMENT",
             targetServiceId: deployment.serviceId,
@@ -171,22 +171,22 @@ export class DeterministicInvestigator implements IncidentInvestigator {
         const first = history.samples[0];
         const latest = history.samples.at(-1);
         if (!first || !latest) return [];
-        const latencyIncreased = latest.latencyMs > first.latencyMs;
-        const errorRateIncreased = latest.errorRate > first.errorRate;
+        const latency = increase(first.latencyMs, latest.latencyMs);
+        const errorRate = increase(first.errorRate, latest.errorRate);
         return [
-          ...(latencyIncreased ? [{
+          ...(latency ? [{
             id: `evidence-${history.serviceId}-latency`,
             kind: "metric-change" as const,
             serviceId: history.serviceId,
             timestamp: latest.timestamp,
-            detail: `Latency increased from ${format(first.latencyMs)} ms to ${format(latest.latencyMs)} ms.`,
+            detail: `Latency increased from ${format(latency.from)} ms to ${format(latency.to)} ms.`,
           }] : []),
-          ...(errorRateIncreased ? [{
+          ...(errorRate ? [{
             id: `evidence-${history.serviceId}-errors`,
             kind: "metric-change" as const,
             serviceId: history.serviceId,
             timestamp: latest.timestamp,
-            detail: `Error rate increased from ${format(first.errorRate)}% to ${format(latest.errorRate)}%.`,
+            detail: `Error rate increased from ${format(errorRate.from)}% to ${format(errorRate.to)}%.`,
           }] : []),
         ];
       });
@@ -195,6 +195,11 @@ export class DeterministicInvestigator implements IncidentInvestigator {
 
 function plural(count: number): string {
   return count === 1 ? "" : "s";
+}
+
+// A metric missing from either sample cannot show a change, so it yields no evidence.
+function increase(from: number | undefined, to: number | undefined): { readonly from: number; readonly to: number } | undefined {
+  return from !== undefined && to !== undefined && to > from ? { from, to } : undefined;
 }
 
 function format(value: number): string {

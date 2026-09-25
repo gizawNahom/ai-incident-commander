@@ -189,6 +189,6 @@ test("simulator retains bounded metric history for incident investigation", () =
 
   assert.equal(history.serviceId, "payment-service");
   assert.equal(history.samples.length, 4);
-  assert.ok(history.samples.at(-1)?.latencyMs > 1_000);
+  assert.ok((history.samples.at(-1)?.latencyMs ?? 0) > 1_000);
   assert.ok(history.samples.every((sample) => sample.timestamp === "2026-08-13T12:00:00.000Z"));
 });

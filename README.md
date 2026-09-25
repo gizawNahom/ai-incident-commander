@@ -89,7 +89,7 @@ If Gemini is unavailable or produces invalid evidence references, the product fa
 
 ```bash
 npm test
-npm run check
+npm run check   # strict TypeScript type check (tsc, no emit)
 ```
 
 GitHub Actions runs those same checks on every pull request to `main` and every

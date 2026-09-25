@@ -47,8 +47,8 @@ test("an incident record retains relevant baseline, failure, and log evidence af
 
   const beforeRecovery = manager.evidenceFor("INC-1042");
   assert.ok(beforeRecovery);
-  assert.ok(beforeRecovery.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs > 1_000)));
-  assert.ok(beforeRecovery.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs < 200)));
+  assert.ok(beforeRecovery.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => (sample.latencyMs ?? 0) > 1_000)));
+  assert.ok(beforeRecovery.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => (sample.latencyMs ?? Infinity) < 200)));
   assert.ok(beforeRecovery.logs.some((entry) => entry.serviceId === "payment-service" && /connection pool timeout/.test(entry.message)));
   assert.ok(beforeRecovery.contextServiceIds.includes("redis"));
   assert.equal(beforeRecovery.contextServiceIds.includes("notification-service"), false);
@@ -61,7 +61,7 @@ test("an incident record retains relevant baseline, failure, and log evidence af
 
   const reportAfterRecovery = manager.evidenceFor("INC-1042");
   const livePayment = simulator.snapshot().services.find((service) => service.id === "payment-service");
-  assert.ok(reportAfterRecovery?.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => sample.latencyMs > 1_000)));
+  assert.ok(reportAfterRecovery?.metricHistories.some((history) => history.serviceId === "payment-service" && history.samples.some((sample) => (sample.latencyMs ?? 0) > 1_000)));
   assert.equal(livePayment?.health, "healthy");
   assert.ok((livePayment?.metrics.latencyMs ?? 0) < 200);
 });

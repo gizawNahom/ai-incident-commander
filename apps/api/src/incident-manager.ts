@@ -648,6 +648,7 @@ function areConnected(services: readonly ObservedService[], from: string, to: st
   const pending = [from];
   while (pending.length > 0) {
     const current = pending.shift();
+    if (current === undefined) break;
     if (current === to) return true;
     for (const adjacent of graph.get(current) ?? []) {
       if (!visited.has(adjacent)) {

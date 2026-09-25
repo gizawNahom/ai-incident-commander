@@ -220,6 +220,21 @@ test("an approved rollback is recorded as failed when the defective deployment i
   });
 });
 
+test("a malformed path encoding is treated as an unknown resource without stopping the server", async () => {
+  await withApp(async (_app, address) => {
+    const cookie = await signIn(address, "maya-chen");
+    const malformed = "%E0%A4%A";
+
+    await expectError(await fetch(`${address}/api/services/${malformed}`), 404);
+    await expectError(await fetch(`${address}/api/alert-policies/${malformed}`, { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }), 404);
+    await expectError(await fetch(`${address}/api/incidents/${malformed}/resolve`, { method: "POST", headers: { cookie } }), 404);
+    await expectError(await fetch(`${address}/api/incidents/${malformed}/command`, { method: "POST", headers: { cookie } }), 404);
+
+    const health = await fetch(`${address}/api/health`);
+    assert.equal(health.status, 200);
+  });
+});
+
 test("the web client entry point is served and unknown routes return 404", async () => {
   await withApp(async (_app, address) => {
     const index = await fetch(`${address}/`);

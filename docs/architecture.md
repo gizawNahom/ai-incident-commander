@@ -26,6 +26,15 @@ packages/
 docs/adr/              concise architectural decisions
 ```
 
+Inside `apps/api/src`, `server.ts` is only the composition root: it constructs
+the simulator, stores, incident manager, and investigator, then hands them to
+the HTTP adapter in `http/`. A small router owns request ids, logging,
+method-not-allowed responses, and path-parameter decoding (a malformed
+encoding is treated as an unknown route). Each resource has its own route
+module (`session`, `telemetry`, `service`, `alert-policy`, `incident`,
+`action`, `simulator`), with SSE fan-out in `event-stream.ts` and the
+allow-listed web client in `static-assets.ts`.
+
 ## Domain model
 
 `Incident` is the lifecycle owner: DETECTED → INVESTIGATING → IDENTIFIED → MITIGATING → MONITORING → RESOLVED. It records affected services, alerts, timeline events, hypotheses, actions, and audit events.
